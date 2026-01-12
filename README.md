@@ -1,4 +1,4 @@
-# Baretools AI
+# [WIP] Baretools AI
 
 **The un-framework for AI Agents**
 
