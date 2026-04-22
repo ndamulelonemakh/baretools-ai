@@ -48,20 +48,20 @@ No magic. No opinions. No fighting the framework.
 ```mermaid
 flowchart TD
     U[User prompt] --> LLM[LLM response]
-    LLM -->|tool_calls| P[parse_tool_calls]
+    LLM -->|tool_calls| P[baretools: parse_tool_calls]
     P --> R[ToolRegistry.execute / execute_async]
     R --> T1[Your Python tool functions]
     R --> F[format_tool_results]
     F --> M[Append tool messages]
     M --> LLM
 
-    subgraph Baretools_Plumbing["Baretools: plumbing only"]
+    subgraph Baretools (plumbing only)
       P
       R
       F
     end
 
-    subgraph You_Control["You control"]
+    subgraph You Control
       U
       LLM
       T1
