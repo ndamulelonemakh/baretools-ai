@@ -139,10 +139,10 @@ formatted_results = format_tool_results(results)
 ## Roadmap
 
 ### ✅ Phase 1: Core (v0.1.0)
-- [ ] Tool decorator and registration
-- [ ] Schema generation (OpenAI format)
-- [ ] Basic tool execution
-- [ ] Error handling
+- [x] Tool decorator and registration
+- [x] Schema generation (OpenAI format)
+- [x] Basic tool execution
+- [x] Error handling
 
 ### 🎯 Phase 2: Multi-Provider (v0.2.0)
 - [ ] Anthropic format support
@@ -150,8 +150,8 @@ formatted_results = format_tool_results(results)
 - [ ] Provider-agnostic schema conversion
 
 ### 🔮 Phase 3: Developer Experience (v0.3.0)
-- [ ] Async tool execution
-- [ ] Built-in logging/tracing hooks
+- [x] Async tool execution
+- [x] Built-in logging/tracing hooks
 - [ ] Pydantic model support
 - [ ] Streaming tool results
 
