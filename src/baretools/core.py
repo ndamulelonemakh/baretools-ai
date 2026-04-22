@@ -8,7 +8,38 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from inspect import Signature, _empty, signature
 from time import perf_counter, sleep
-from typing import Any, Callable
+from typing import Any, Callable, Literal, Mapping, TypedDict, TypeVar
+
+
+class ToolCall(TypedDict, total=False):
+    id: str | None
+    tool_call_id: str | None
+    name: str | None
+    arguments: dict[str, Any] | str
+
+
+class ToolResult(TypedDict):
+    tool_call_id: str | None
+    tool_name: str | None
+    output: Any
+    error: str | None
+    attempts: int
+    execution_time_ms: int
+
+
+class ToolEvent(TypedDict, total=False):
+    event: Literal["tool_attempt", "tool_retry", "tool_failed"]
+    tool_call_id: str | None
+    tool_name: str | None
+    attempt: int
+    error: str
+
+
+class ToolMessage(TypedDict):
+    role: Literal["tool"]
+    tool_call_id: str | None
+    content: str
+
 
 JSON_SCHEMA_TYPE_MAP: dict[type, str] = {
     str: "string",
@@ -19,6 +50,8 @@ JSON_SCHEMA_TYPE_MAP: dict[type, str] = {
     dict: "object",
 }
 
+F = TypeVar("F", bound=Callable[..., Any])
+
 
 @dataclass(frozen=True)
 class RegisteredTool:
@@ -27,19 +60,18 @@ class RegisteredTool:
     function: Callable[..., Any]
     schema: dict[str, Any]
 
-
 def tool(
-    func: Callable[..., Any] | None = None,
+    func: F | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
-):
+) -> F | Callable[[F], F]:
     """Mark a function as a baretools tool with optional metadata overrides."""
 
-    def _decorate(inner: Callable[..., Any]) -> Callable[..., Any]:
-        inner.__baretools_tool__ = True
-        inner.__baretools_name__ = name or inner.__name__
-        inner.__baretools_description__ = description or (inner.__doc__ or "").strip()
+    def _decorate(inner: F) -> F:
+        inner.__baretools_tool__ = True  # type: ignore[attr-defined]
+        inner.__baretools_name__ = name or inner.__name__  # type: ignore[attr-defined]
+        inner.__baretools_description__ = description or (inner.__doc__ or "").strip()  # type: ignore[attr-defined]
         return inner
 
     if func is None:
@@ -82,13 +114,13 @@ class ToolRegistry:
 
     def execute(
         self,
-        tool_calls: list[dict[str, Any]],
+        tool_calls: list[ToolCall] | list[Mapping[str, Any]],
         *,
         parallel: bool = False,
         max_workers: int | None = None,
         retries: int = 0,
         retry_delay_seconds: float = 0.0,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ToolResult]:
         """Sync execution API; supports both sync and async tool functions."""
         if parallel and len(tool_calls) > 1:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -114,18 +146,18 @@ class ToolRegistry:
 
     async def execute_async(
         self,
-        tool_calls: list[dict[str, Any]],
+        tool_calls: list[ToolCall] | list[Mapping[str, Any]],
         *,
         parallel: bool = False,
         max_concurrency: int | None = None,
         retries: int = 0,
         retry_delay_seconds: float = 0.0,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ToolResult]:
         """Async execution API; use this from existing async agent loops."""
         if parallel and len(tool_calls) > 1:
             semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
 
-            async def _run(call: dict[str, Any]) -> dict[str, Any]:
+            async def _run(call: Mapping[str, Any]) -> ToolResult:
                 if semaphore is None:
                     return await self._execute_with_retry_async(
                         call,
@@ -152,11 +184,11 @@ class ToolRegistry:
 
     def _execute_with_retry_sync(
         self,
-        tool_call: dict[str, Any],
+        tool_call: Mapping[str, Any],
         *,
         retries: int,
         retry_delay_seconds: float,
-    ) -> dict[str, Any]:
+    ) -> ToolResult:
         if retries < 0:
             raise ValueError("retries must be >= 0")
         if retry_delay_seconds < 0:
@@ -200,11 +232,11 @@ class ToolRegistry:
 
     async def _execute_with_retry_async(
         self,
-        tool_call: dict[str, Any],
+        tool_call: Mapping[str, Any],
         *,
         retries: int,
         retry_delay_seconds: float,
-    ) -> dict[str, Any]:
+    ) -> ToolResult:
         if retries < 0:
             raise ValueError("retries must be >= 0")
         if retry_delay_seconds < 0:
@@ -274,29 +306,48 @@ class ToolRegistry:
             }
         )
 
-    def _emit_event(self, event: dict[str, Any]) -> None:
+    def _emit_event(self, event: ToolEvent) -> None:
         if self._on_event is not None:
             self._on_event(event)
 
 
-def parse_tool_calls(message: Any) -> list[dict[str, Any]]:
+def parse_tool_calls(message: Any) -> list[ToolCall]:
     """Parse OpenAI-style message.tool_calls into a normalized internal shape."""
-    raw_calls = getattr(message, "tool_calls", None) or []
+    
+    # Support both object attributes (OpenAI v1 objects) and dict keys (JSON payloads)
+    if isinstance(message, dict):
+        raw_calls = message.get("tool_calls", [])
+    else:
+        raw_calls = getattr(message, "tool_calls", None) or []
+        
     normalized = []
     for call in raw_calls:
-        normalized.append(
-            {
+        if isinstance(call, dict):
+            func_data = call.get("function", {})
+            if isinstance(func_data, dict):
+                fn_name = func_data.get("name")
+                fn_args = func_data.get("arguments", "{}")
+            else:
+                fn_name = getattr(func_data, "name", None)
+                fn_args = getattr(func_data, "arguments", "{}")
+            normalized.append({
+                "id": call.get("id"),
+                "name": fn_name,
+                "arguments": fn_args,
+            })
+        else:
+            func_data = getattr(call, "function", None)
+            normalized.append({
                 "id": getattr(call, "id", None),
-                "name": getattr(call.function, "name", None),
-                "arguments": getattr(call.function, "arguments", "{}"),
-            }
-        )
+                "name": getattr(func_data, "name", None) if func_data else None,
+                "arguments": getattr(func_data, "arguments", "{}") if func_data else "{}",
+            })
     return normalized
 
 
-def format_tool_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def format_tool_results(results: list[ToolResult]) -> list[ToolMessage]:
     """Format internal tool results for an OpenAI tool-role message append."""
-    formatted = []
+    formatted: list[ToolMessage] = []
     for result in results:
         content = result["output"] if result["error"] is None else f"ERROR: {result['error']}"
         formatted.append(
@@ -309,7 +360,7 @@ def format_tool_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return formatted
 
 
-def _normalize_call(tool_call: dict[str, Any]) -> tuple[str | None, str | None, dict[str, Any]]:
+def _normalize_call(tool_call: Mapping[str, Any]) -> tuple[str | None, str | None, dict[str, Any]]:
     call_id = tool_call.get("id") or tool_call.get("tool_call_id")
     name = tool_call.get("name")
     arguments = tool_call.get("arguments", {})
@@ -338,7 +389,7 @@ def _result(
     error: str | None,
     attempts: int,
     started: float,
-) -> dict[str, Any]:
+) -> ToolResult:
     return {
         "tool_call_id": call_id,
         "tool_name": name,
