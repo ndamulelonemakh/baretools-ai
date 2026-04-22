@@ -60,6 +60,7 @@ class RegisteredTool:
     function: Callable[..., Any]
     schema: dict[str, Any]
 
+
 def tool(
     func: F | None = None,
     *,
@@ -313,13 +314,13 @@ class ToolRegistry:
 
 def parse_tool_calls(message: Any) -> list[ToolCall]:
     """Parse OpenAI-style message.tool_calls into a normalized internal shape."""
-    
+
     # Support both object attributes (OpenAI v1 objects) and dict keys (JSON payloads)
     if isinstance(message, dict):
         raw_calls = message.get("tool_calls", [])
     else:
         raw_calls = getattr(message, "tool_calls", None) or []
-        
+
     normalized = []
     for call in raw_calls:
         if isinstance(call, dict):
@@ -330,18 +331,22 @@ def parse_tool_calls(message: Any) -> list[ToolCall]:
             else:
                 fn_name = getattr(func_data, "name", None)
                 fn_args = getattr(func_data, "arguments", "{}")
-            normalized.append({
-                "id": call.get("id"),
-                "name": fn_name,
-                "arguments": fn_args,
-            })
+            normalized.append(
+                {
+                    "id": call.get("id"),
+                    "name": fn_name,
+                    "arguments": fn_args,
+                }
+            )
         else:
             func_data = getattr(call, "function", None)
-            normalized.append({
-                "id": getattr(call, "id", None),
-                "name": getattr(func_data, "name", None) if func_data else None,
-                "arguments": getattr(func_data, "arguments", "{}") if func_data else "{}",
-            })
+            normalized.append(
+                {
+                    "id": getattr(call, "id", None),
+                    "name": getattr(func_data, "name", None) if func_data else None,
+                    "arguments": getattr(func_data, "arguments", "{}") if func_data else "{}",
+                }
+            )
     return normalized
 
 

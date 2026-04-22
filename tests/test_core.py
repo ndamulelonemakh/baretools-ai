@@ -19,9 +19,11 @@ def test_schema_generation_and_execution() -> None:
     assert len(schemas) == 1
     assert schemas[0]["function"]["name"] == "add"
 
-    results = registry.execute([
-        {"id": "call1", "name": "add", "arguments": {"a": 3, "b": 2}},
-    ])
+    results = registry.execute(
+        [
+            {"id": "call1", "name": "add", "arguments": {"a": 3, "b": 2}},
+        ]
+    )
 
     assert results[0]["error"] is None
     assert results[0]["output"] == 5
@@ -134,9 +136,11 @@ def test_sync_execute_supports_async_tools() -> None:
     registry = ToolRegistry()
     registry.register(async_add)
 
-    result = registry.execute([
-        {"id": "a1", "name": "async_add", "arguments": {"a": 3, "b": 4}},
-    ])[0]
+    result = registry.execute(
+        [
+            {"id": "a1", "name": "async_add", "arguments": {"a": 3, "b": 4}},
+        ]
+    )[0]
 
     assert result["error"] is None
     assert result["output"] == 7
@@ -156,15 +160,17 @@ def test_execute_async_parallel_and_retry() -> None:
     registry = ToolRegistry()
     registry.register(flaky_async)
 
-    results = asyncio.run(registry.execute_async(
-        [
-            {"id": "aa1", "name": "flaky_async", "arguments": {"value": 2}},
-            {"id": "aa2", "name": "flaky_async", "arguments": {"value": 3}},
-        ],
-        parallel=True,
-        max_concurrency=2,
-        retries=1,
-    ))
+    results = asyncio.run(
+        registry.execute_async(
+            [
+                {"id": "aa1", "name": "flaky_async", "arguments": {"value": 2}},
+                {"id": "aa2", "name": "flaky_async", "arguments": {"value": 3}},
+            ],
+            parallel=True,
+            max_concurrency=2,
+            retries=1,
+        )
+    )
 
     outputs = sorted(r["output"] for r in results if r["error"] is None)
     assert outputs == [20, 30]

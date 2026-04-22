@@ -227,17 +227,17 @@ while True:
         messages=messages,
         tools=tools.get_schemas()  # ← Baretools helps here
     )
-    
+
     message = response.choices[0].message
-    
+
     # No tool calls? We're done
     if not message.tool_calls:
         print(message.content)
         break
-    
+
     # Execute tools
     results = tools.execute(message.tool_calls)  # ← Baretools helps here
-    
+
     # YOU decide how to handle results
     messages.append(message)
     messages.append({
@@ -257,12 +257,12 @@ while True:
 max_iterations = 5
 for i in range(max_iterations):
     response = llm.chat(messages, tools=tools.get_schemas())
-    
+
     if not response.tool_calls:
         break
-        
+
     results = tools.execute(response.tool_calls)
-    
+
     # Your custom logic
     if any(r["error"] for r in results):
         # Handle errors your way
