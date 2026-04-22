@@ -55,13 +55,13 @@ flowchart TD
     F --> M[Append tool messages]
     M --> LLM
 
-    subgraph Baretools (plumbing only)
+    subgraph baretools["Baretools (plumbing only)"]
       P
       R
       F
     end
 
-    subgraph You Control
+    subgraph you["You Control"]
       U
       LLM
       T1
