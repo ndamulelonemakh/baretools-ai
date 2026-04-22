@@ -136,7 +136,7 @@ formatted_results = format_tool_results(results)
 
 ## CI
 
-GitHub Actions now runs `ruff check .` and `pytest -q` on pushes and pull requests targeting `main`.
+GitHub Actions now uses `uv` to run `ruff check .` and `pytest -q` on pushes and pull requests targeting `main`.
 
 ---
 
@@ -150,8 +150,8 @@ This repository now includes a minimal `v0.1.0` implementation in `src/baretools
 
 Run locally:
 ```bash
-pip install -e .[dev]
-pytest
+uv sync --group dev
+uv run pytest -q
 ```
 
 ---
