@@ -133,6 +133,29 @@ formatted_results = format_tool_results(results)
 
 ---
 
+
+## CI
+
+GitHub Actions now runs `ruff check .` and `pytest -q` on pushes and pull requests targeting `main`.
+
+---
+
+## Current Implementation Status
+
+This repository now includes a minimal `v0.1.0` implementation in `src/baretools` with:
+- `@tool` decorator metadata
+- `ToolRegistry.register()` schema generation
+- `ToolRegistry.execute()` with optional parallel execution
+- `parse_tool_calls()` and `format_tool_results()` helpers
+
+Run locally:
+```bash
+pip install -e .[dev]
+pytest
+```
+
+---
+
 ## Installation
 
 ```bash
