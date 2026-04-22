@@ -133,6 +133,29 @@ formatted_results = format_tool_results(results)
 
 ---
 
+
+## CI
+
+GitHub Actions now uses `uv` to run `ruff check .` and `pytest -q` on pushes and pull requests targeting `main`.
+
+---
+
+## Current Implementation Status
+
+This repository now includes a minimal `v0.1.0` implementation in `src/baretools` with:
+- `@tool` decorator metadata
+- `ToolRegistry.register()` schema generation
+- `ToolRegistry.execute()` with optional parallel execution
+- `parse_tool_calls()` and `format_tool_results()` helpers
+
+Run locally:
+```bash
+uv sync --group dev
+uv run pytest -q
+```
+
+---
+
 ## Installation
 
 ```bash
@@ -219,6 +242,25 @@ for i in range(max_iterations):
         for result in results:
             messages.append(format_tool_result(result))
 ```
+
+### Parallel Calls, Logging, and Retries
+```python
+import logging
+from baretools import ToolRegistry
+
+events = []
+registry = ToolRegistry(logger=logging.getLogger("baretools"), on_event=events.append)
+
+results = registry.execute(
+    tool_calls,
+    parallel=True,
+    max_workers=8,
+    retries=2,
+    retry_delay_seconds=0.2,
+)
+```
+
+`results` includes `attempts` metadata for each call, and `on_event` receives structured tool execution events (attempt/retry/failure).
 
 ### Parallel Execution
 ```python
