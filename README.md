@@ -243,6 +243,19 @@ for i in range(max_iterations):
             messages.append(format_tool_result(result))
 ```
 
+### Async Tools
+```python
+@tool
+async def fetch_customer(customer_id: str) -> dict:
+    return await api_client.get_customer(customer_id)
+
+# Works in sync loops
+sync_results = tools.execute(tool_calls)
+
+# Works in async loops
+async_results = await tools.execute_async(tool_calls, parallel=True, retries=1)
+```
+
 ### Parallel Calls, Logging, and Retries
 ```python
 import logging

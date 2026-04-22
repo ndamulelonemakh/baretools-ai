@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from time import perf_counter, sleep
 
 from baretools import ToolRegistry, format_tool_results, tool
@@ -122,3 +123,49 @@ def test_retry_exhaustion_returns_error() -> None:
     assert result["output"] is None
     assert "nope" in result["error"]
     assert result["attempts"] == 3
+
+
+def test_sync_execute_supports_async_tools() -> None:
+    @tool
+    async def async_add(a: int, b: int) -> int:
+        await asyncio.sleep(0.01)
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(async_add)
+
+    result = registry.execute([
+        {"id": "a1", "name": "async_add", "arguments": {"a": 3, "b": 4}},
+    ])[0]
+
+    assert result["error"] is None
+    assert result["output"] == 7
+
+
+def test_execute_async_parallel_and_retry() -> None:
+    calls_seen = {"count": 0}
+
+    @tool
+    async def flaky_async(value: int) -> int:
+        calls_seen["count"] += 1
+        await asyncio.sleep(0.05)
+        if calls_seen["count"] == 1:
+            raise RuntimeError("try again")
+        return value * 10
+
+    registry = ToolRegistry()
+    registry.register(flaky_async)
+
+    results = asyncio.run(registry.execute_async(
+        [
+            {"id": "aa1", "name": "flaky_async", "arguments": {"value": 2}},
+            {"id": "aa2", "name": "flaky_async", "arguments": {"value": 3}},
+        ],
+        parallel=True,
+        max_concurrency=2,
+        retries=1,
+    ))
+
+    outputs = sorted(r["output"] for r in results if r["error"] is None)
+    assert outputs == [20, 30]
+    assert max(r["attempts"] for r in results) >= 1
