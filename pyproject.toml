@@ -1,25 +1,53 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
 
 [project]
 name = "baretools-ai"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Minimal tooling primitives for LLM tool calling"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Baretools AI Contributors" }]
+keywords = ["llm", "agents", "tools", "tool-calling", "openai", "anthropic"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/ndamulelonemakh/baretools-ai"
+Repository = "https://github.com/ndamulelonemakh/baretools-ai"
+Issues = "https://github.com/ndamulelonemakh/baretools-ai/issues"
+Changelog = "https://github.com/ndamulelonemakh/baretools-ai/blob/main/CHANGELOG.md"
+
 [dependency-groups]
-dev = ["pytest>=8.0.0", "ruff>=0.5.0"]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.5.0",
+    "pre-commit>=3.7.0",
+    "python-semantic-release>=9.8.0",
+]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[tool.hatch.version]
+path = "src/baretools/__init__.py"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.hatch.build.targets.wheel]
+packages = ["src/baretools"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/baretools", "README.md", "LICENSE", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -33,3 +61,27 @@ select = ["E", "F", "I", "B"]
 
 [tool.uv]
 required-version = ">=0.7.0"
+
+[tool.semantic_release]
+version_variables = ["src/baretools/__init__.py:__version__"]
+build_command = "uv build"
+commit_parser = "conventional"
+major_on_zero = false
+allow_zero_version = true
+tag_format = "v{version}"
+upload_to_vcs_release = true
+
+[tool.semantic_release.branches.main]
+match = "main"
+prerelease = false
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["feat", "fix", "perf", "refactor", "build", "chore", "ci", "docs", "style", "test", "revert"]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+
+[tool.semantic_release.changelog]
+mode = "update"
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "CHANGELOG.md"

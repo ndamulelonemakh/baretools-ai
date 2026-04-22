@@ -55,13 +55,13 @@ flowchart TD
     F --> M[Append tool messages]
     M --> LLM
 
-    subgraph Baretools (plumbing only)
+    subgraph baretools["Baretools (plumbing only)"]
       P
       R
       F
     end
 
-    subgraph You Control
+    subgraph you["You Control"]
       U
       LLM
       T1
@@ -139,10 +139,10 @@ formatted_results = format_tool_results(results)
 ## Roadmap
 
 ### ✅ Phase 1: Core (v0.1.0)
-- [ ] Tool decorator and registration
-- [ ] Schema generation (OpenAI format)
-- [ ] Basic tool execution
-- [ ] Error handling
+- [x] Tool decorator and registration
+- [x] Schema generation (OpenAI format)
+- [x] Basic tool execution
+- [x] Error handling
 
 ### 🎯 Phase 2: Multi-Provider (v0.2.0)
 - [ ] Anthropic format support
@@ -150,8 +150,8 @@ formatted_results = format_tool_results(results)
 - [ ] Provider-agnostic schema conversion
 
 ### 🔮 Phase 3: Developer Experience (v0.3.0)
-- [ ] Async tool execution
-- [ ] Built-in logging/tracing hooks
+- [x] Async tool execution
+- [x] Built-in logging/tracing hooks
 - [ ] Pydantic model support
 - [ ] Streaming tool results
 
@@ -227,17 +227,17 @@ while True:
         messages=messages,
         tools=tools.get_schemas()  # ← Baretools helps here
     )
-    
+
     message = response.choices[0].message
-    
+
     # No tool calls? We're done
     if not message.tool_calls:
         print(message.content)
         break
-    
+
     # Execute tools
     results = tools.execute(message.tool_calls)  # ← Baretools helps here
-    
+
     # YOU decide how to handle results
     messages.append(message)
     messages.append({
@@ -257,12 +257,12 @@ while True:
 max_iterations = 5
 for i in range(max_iterations):
     response = llm.chat(messages, tools=tools.get_schemas())
-    
+
     if not response.tool_calls:
         break
-        
+
     results = tools.execute(response.tool_calls)
-    
+
     # Your custom logic
     if any(r["error"] for r in results):
         # Handle errors your way
