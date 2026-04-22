@@ -43,6 +43,36 @@ No magic. No opinions. No fighting the framework.
 
 ---
 
+## Visual Overview
+
+```mermaid
+flowchart TD
+    U[User prompt] --> LLM[LLM response]
+    LLM -->|tool_calls| P[parse_tool_calls]
+    P --> R[ToolRegistry.execute / execute_async]
+    R --> T1[Your Python tool functions]
+    R --> F[format_tool_results]
+    F --> M[Append tool messages]
+    M --> LLM
+
+    subgraph Baretools_Plumbing["Baretools: plumbing only"]
+      P
+      R
+      F
+    end
+
+    subgraph You_Control["You control"]
+      U
+      LLM
+      T1
+      M
+    end
+```
+
+Baretools handles schema conversion + tool execution mechanics, while you keep full control over prompts, orchestration loops, retries policy, and state management.
+
+---
+
 ## Technical Specification
 
 ### Core Components
@@ -133,6 +163,29 @@ formatted_results = format_tool_results(results)
 
 ---
 
+
+## CI
+
+GitHub Actions now uses `uv` to run `ruff check .` and `pytest -q` on pushes and pull requests targeting `main`.
+
+---
+
+## Current Implementation Status
+
+This repository now includes a minimal `v0.1.0` implementation in `src/baretools` with:
+- `@tool` decorator metadata
+- `ToolRegistry.register()` schema generation
+- `ToolRegistry.execute()` with optional parallel execution
+- `parse_tool_calls()` and `format_tool_results()` helpers
+
+Run locally:
+```bash
+uv sync --group dev
+uv run pytest -q
+```
+
+---
+
 ## Installation
 
 ```bash
@@ -219,6 +272,38 @@ for i in range(max_iterations):
         for result in results:
             messages.append(format_tool_result(result))
 ```
+
+### Async Tools
+```python
+@tool
+async def fetch_customer(customer_id: str) -> dict:
+    return await api_client.get_customer(customer_id)
+
+# Works in sync loops
+sync_results = tools.execute(tool_calls)
+
+# Works in async loops
+async_results = await tools.execute_async(tool_calls, parallel=True, retries=1)
+```
+
+### Parallel Calls, Logging, and Retries
+```python
+import logging
+from baretools import ToolRegistry
+
+events = []
+registry = ToolRegistry(logger=logging.getLogger("baretools"), on_event=events.append)
+
+results = registry.execute(
+    tool_calls,
+    parallel=True,
+    max_workers=8,
+    retries=2,
+    retry_delay_seconds=0.2,
+)
+```
+
+`results` includes `attempts` metadata for each call, and `on_event` receives structured tool execution events (attempt/retry/failure).
 
 ### Parallel Execution
 ```python
