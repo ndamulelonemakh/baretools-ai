@@ -43,6 +43,36 @@ No magic. No opinions. No fighting the framework.
 
 ---
 
+## Visual Overview
+
+```mermaid
+flowchart TD
+    U[User prompt] --> LLM[LLM response]
+    LLM -->|tool_calls| P[baretools: parse_tool_calls]
+    P --> R[ToolRegistry.execute / execute_async]
+    R --> T1[Your Python tool functions]
+    R --> F[format_tool_results]
+    F --> M[Append tool messages]
+    M --> LLM
+
+    subgraph Baretools (plumbing only)
+      P
+      R
+      F
+    end
+
+    subgraph You Control
+      U
+      LLM
+      T1
+      M
+    end
+```
+
+Baretools handles schema conversion + tool execution mechanics, while you keep full control over prompts, orchestration loops, retries policy, and state management.
+
+---
+
 ## Technical Specification
 
 ### Core Components
