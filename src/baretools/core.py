@@ -333,9 +333,15 @@ class ToolRegistry:
         if retry_delay_seconds < 0:
             raise ValueError("retry_delay_seconds must be >= 0")
 
-        call_id, name, arguments = _normalize_call(tool_call)
-
         started = perf_counter()
+        call_id = tool_call.get("id") or tool_call.get("tool_call_id")
+        name = tool_call.get("name")
+        try:
+            call_id, name, arguments = _normalize_call(tool_call)
+        except Exception as exc:  # noqa: BLE001
+            self._emit_failure(call_id, name, 1, 0, 0, exc)
+            return _result(call_id, name, None, str(exc), 1, started)
+
         attempts = 0
         last_error: Exception | None = None
 
@@ -382,9 +388,15 @@ class ToolRegistry:
         if retry_delay_seconds < 0:
             raise ValueError("retry_delay_seconds must be >= 0")
 
-        call_id, name, arguments = _normalize_call(tool_call)
-
         started = perf_counter()
+        call_id = tool_call.get("id") or tool_call.get("tool_call_id")
+        name = tool_call.get("name")
+        try:
+            call_id, name, arguments = _normalize_call(tool_call)
+        except Exception as exc:  # noqa: BLE001
+            self._emit_failure(call_id, name, 1, 0, 0, exc)
+            return _result(call_id, name, None, str(exc), 1, started)
+
         attempts = 0
         last_error: Exception | None = None
 

@@ -591,3 +591,121 @@ def test_dataclass_model_parameter_schema_and_coercion() -> None:
     args = {"name": "Bob", "address": {"street": "123 Elm", "city": "NYC", "zip": "10001"}}
     result = registry.execute([{"id": "test", "name": "create_user", "arguments": args}])[0]
     assert result["output"] == {"name": "Bob", "city": "NYC", "zip": "10001"}
+
+
+def test_register_rejects_duplicate_tool_name() -> None:
+    @tool
+    def ping() -> str:
+        return "pong"
+
+    registry = ToolRegistry()
+    registry.register(ping)
+
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(ping)
+
+
+def test_execute_returns_error_for_malformed_json_arguments() -> None:
+    @tool
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    result = registry.execute(
+        [{"id": "bad-json", "name": "add", "arguments": "{\"a\": 1,"}]
+    )[0]
+
+    assert result["output"] is None
+    assert result["attempts"] == 1
+    assert "Expecting" in (result["error"] or "")
+
+
+def test_execute_reports_unknown_tool_calls_cleanly() -> None:
+    registry = ToolRegistry()
+
+    result = registry.execute([{"id": "missing", "name": "does_not_exist", "arguments": {}}])[0]
+
+    assert result["output"] is None
+    assert result["attempts"] == 1
+    assert "Unknown tool" in (result["error"] or "")
+
+
+def test_execute_async_rejects_negative_retries() -> None:
+    @tool
+    async def ping() -> str:
+        return "pong"
+
+    registry = ToolRegistry()
+    registry.register(ping)
+
+    with pytest.raises(ValueError, match="retries must be >= 0"):
+        asyncio.run(
+            registry.execute_async(
+                [{"id": "x", "name": "ping", "arguments": {}}],
+                retries=-1,
+            )
+        )
+
+
+def test_format_tool_results_rejects_json_schema_provider() -> None:
+    with pytest.raises(ValueError, match="Unsupported provider"):
+        format_tool_results([], "json_schema")
+
+
+def test_execute_returns_error_when_tool_receives_unexpected_arguments() -> None:
+    @tool
+    def multiply(a: int, b: int) -> int:
+        return a * b
+
+    registry = ToolRegistry()
+    registry.register(multiply)
+
+    result = registry.execute(
+        [
+            {
+                "id": "too-many-args",
+                "name": "multiply",
+                "arguments": {"a": 2, "b": 3, "c": 4},
+            }
+        ]
+    )[0]
+
+    assert result["output"] is None
+    assert result["attempts"] == 1
+    assert "unexpected keyword argument" in (result["error"] or "")
+
+
+def test_execute_parallel_handles_large_batches_of_tool_calls() -> None:
+    @tool
+    def identity(n: int) -> int:
+        return n
+
+    registry = ToolRegistry()
+    registry.register(identity)
+
+    calls = [{"id": f"i{idx}", "name": "identity", "arguments": {"n": idx}} for idx in range(200)]
+
+    results = registry.execute(calls, parallel=True, max_workers=8)
+
+    assert len(results) == len(calls)
+    assert all(result["error"] is None for result in results)
+    assert sorted(result["output"] for result in results) == list(range(200))
+
+
+def test_execute_stream_parallel_handles_large_batches_of_tool_calls() -> None:
+    @tool
+    def identity(n: int) -> int:
+        return n
+
+    registry = ToolRegistry()
+    registry.register(identity)
+
+    calls = [{"id": f"s{idx}", "name": "identity", "arguments": {"n": idx}} for idx in range(150)]
+
+    streamed = list(registry.execute_stream(calls, parallel=True, max_workers=6))
+
+    assert len(streamed) == len(calls)
+    assert all(result["error"] is None for result in streamed)
+    assert sorted(result["output"] for result in streamed) == list(range(150))
