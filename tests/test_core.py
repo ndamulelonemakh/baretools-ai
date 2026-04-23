@@ -30,6 +30,48 @@ def test_schema_generation_and_execution() -> None:
     assert results[0]["attempts"] == 1
 
 
+def test_schema_generation_for_multiple_providers() -> None:
+    @tool
+    def add(a: int, b: int = 1) -> int:
+        """Add two numbers"""
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    openai_schemas = registry.get_schemas("openai")
+    anthropic_schemas = registry.get_schemas("anthropic")
+    gemini_schemas = registry.get_schemas("gemini")
+    json_schemas = registry.get_schemas("json_schema")
+
+    assert openai_schemas[0]["type"] == "function"
+    assert openai_schemas[0]["function"]["name"] == "add"
+
+    assert anthropic_schemas[0]["name"] == "add"
+    assert anthropic_schemas[0]["input_schema"]["type"] == "object"
+
+    assert gemini_schemas[0]["name"] == "add"
+    assert gemini_schemas[0]["parameters"]["properties"]["a"]["type"] == "integer"
+
+    assert json_schemas[0]["name"] == "add"
+    assert json_schemas[0]["schema"]["required"] == ["a"]
+
+
+def test_get_schemas_rejects_unknown_provider() -> None:
+    @tool
+    def ping() -> str:
+        return "pong"
+
+    registry = ToolRegistry()
+    registry.register(ping)
+
+    try:
+        registry.get_schemas("unsupported")  # type: ignore[arg-type]
+        raise AssertionError("Expected ValueError")
+    except ValueError as exc:
+        assert "Unsupported provider" in str(exc)
+
+
 def test_error_is_captured() -> None:
     @tool
     def crash() -> None:

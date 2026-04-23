@@ -98,7 +98,7 @@ tools = ToolRegistry()
 tools.register(search_web)
 
 # Get LLM-compatible schema
-schemas = tools.get_schemas()  # Returns OpenAI/Anthropic format
+schemas = tools.get_schemas("openai")  # or anthropic/gemini/json_schema
 ```
 
 **Output formats:**
@@ -145,9 +145,9 @@ formatted_results = format_tool_results(results)
 - [x] Error handling
 
 ### 🎯 Phase 2: Multi-Provider (v0.2.0)
-- [ ] Anthropic format support
-- [ ] Google/Gemini format support
-- [ ] Provider-agnostic schema conversion
+- [x] Anthropic format support
+- [x] Google/Gemini format support
+- [x] Provider-agnostic schema conversion
 
 ### 🔮 Phase 3: Developer Experience (v0.3.0)
 - [x] Async tool execution

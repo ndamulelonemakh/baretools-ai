@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from inspect import Signature, _empty, signature
 from time import perf_counter, sleep
-from typing import Any, Callable, Literal, Mapping, TypedDict, TypeVar
+from typing import Any, Callable, Literal, Mapping, TypedDict, TypeVar, cast
 
 
 class ToolCall(TypedDict, total=False):
@@ -58,7 +58,7 @@ class RegisteredTool:
     name: str
     description: str
     function: Callable[..., Any]
-    schema: dict[str, Any]
+    parameters: dict[str, Any]
 
 
 def tool(
@@ -102,16 +102,31 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool_name}' already registered")
 
         sig = signature(fn)
-        schema = _function_to_openai_schema(tool_name, description, sig)
+        parameters = _signature_to_json_schema(sig)
         self._tools[tool_name] = RegisteredTool(
             name=tool_name,
             description=description,
             function=fn,
-            schema=schema,
+            parameters=parameters,
         )
 
-    def get_schemas(self) -> list[dict[str, Any]]:
-        return [tool.schema for tool in self._tools.values()]
+    def get_schemas(
+        self,
+        provider: Literal["openai", "anthropic", "gemini", "json_schema"] = "openai",
+    ) -> list[dict[str, Any]]:
+        schemas: list[dict[str, Any]] = []
+        for tool in self._tools.values():
+            if provider == "openai":
+                schemas.append(_tool_to_openai_schema(tool))
+            elif provider == "anthropic":
+                schemas.append(_tool_to_anthropic_schema(tool))
+            elif provider == "gemini":
+                schemas.append(_tool_to_gemini_schema(tool))
+            elif provider == "json_schema":
+                schemas.append(_tool_to_json_schema(tool))
+            else:
+                raise ValueError(f"Unsupported provider: {provider}")
+        return schemas
 
     def execute(
         self,
@@ -405,7 +420,7 @@ def _result(
     }
 
 
-def _function_to_openai_schema(name: str, description: str, sig: Signature) -> dict[str, Any]:
+def _signature_to_json_schema(sig: Signature) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     required: list[str] = []
 
@@ -420,23 +435,61 @@ def _function_to_openai_schema(name: str, description: str, sig: Signature) -> d
             required.append(param_name)
 
     return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def _tool_to_openai_schema(tool: RegisteredTool) -> dict[str, Any]:
+    return {
         "type": "function",
         "function": {
-            "name": name,
-            "description": description,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": False,
-            },
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
         },
+    }
+
+
+def _tool_to_anthropic_schema(tool: RegisteredTool) -> dict[str, Any]:
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": tool.parameters,
+    }
+
+
+def _tool_to_gemini_schema(tool: RegisteredTool) -> dict[str, Any]:
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+    }
+
+
+def _tool_to_json_schema(tool: RegisteredTool) -> dict[str, Any]:
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "schema": cast(dict[str, Any], tool.parameters),
     }
 
 
 def _annotation_to_json_type(annotation: Any) -> str:
     if annotation is _empty:
         return "string"
+
+    if isinstance(annotation, str):
+        return {
+            "str": "string",
+            "int": "integer",
+            "float": "number",
+            "bool": "boolean",
+            "list": "array",
+            "dict": "object",
+        }.get(annotation, "string")
 
     origin = getattr(annotation, "__origin__", None)
     if origin is list:
