@@ -72,6 +72,37 @@ def test_get_schemas_rejects_unknown_provider() -> None:
         assert "Unsupported provider" in str(exc)
 
 
+def test_get_schemas_rejects_unknown_provider_when_registry_is_empty() -> None:
+    registry = ToolRegistry()
+
+    try:
+        registry.get_schemas("unsupported")  # type: ignore[arg-type]
+        raise AssertionError("Expected ValueError")
+    except ValueError as exc:
+        assert "Unsupported provider" in str(exc)
+
+
+def test_get_schemas_returns_defensive_copies() -> None:
+    @tool
+    def add(a: int, b: int = 1) -> int:
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    openai_schemas = registry.get_schemas("openai")
+    openai_schemas[0]["function"]["parameters"]["properties"]["a"]["type"] = "string"
+
+    fresh_openai_schemas = registry.get_schemas("openai")
+    assert fresh_openai_schemas[0]["function"]["parameters"]["properties"]["a"]["type"] == "integer"
+
+    anthropic_schemas = registry.get_schemas("anthropic")
+    anthropic_schemas[0]["input_schema"]["properties"]["a"]["type"] = "string"
+
+    fresh_anthropic_schemas = registry.get_schemas("anthropic")
+    assert fresh_anthropic_schemas[0]["input_schema"]["properties"]["a"]["type"] == "integer"
+
+
 def test_error_is_captured() -> None:
     @tool
     def crash() -> None:

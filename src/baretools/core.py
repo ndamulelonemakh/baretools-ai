@@ -5,10 +5,11 @@ import inspect
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from dataclasses import dataclass
 from inspect import Signature, _empty, signature
 from time import perf_counter, sleep
-from typing import Any, Callable, Literal, Mapping, TypedDict, TypeVar, cast
+from typing import Any, Callable, Literal, Mapping, TypedDict, TypeVar
 
 
 class ToolCall(TypedDict, total=False):
@@ -114,6 +115,10 @@ class ToolRegistry:
         self,
         provider: Literal["openai", "anthropic", "gemini", "json_schema"] = "openai",
     ) -> list[dict[str, Any]]:
+        supported_providers = {"openai", "anthropic", "gemini", "json_schema"}
+        if provider not in supported_providers:
+            raise ValueError(f"Unsupported provider: {provider}")
+
         schemas: list[dict[str, Any]] = []
         for tool in self._tools.values():
             if provider == "openai":
@@ -122,10 +127,8 @@ class ToolRegistry:
                 schemas.append(_tool_to_anthropic_schema(tool))
             elif provider == "gemini":
                 schemas.append(_tool_to_gemini_schema(tool))
-            elif provider == "json_schema":
-                schemas.append(_tool_to_json_schema(tool))
             else:
-                raise ValueError(f"Unsupported provider: {provider}")
+                schemas.append(_tool_to_json_schema(tool))
         return schemas
 
     def execute(
@@ -448,7 +451,7 @@ def _tool_to_openai_schema(tool: RegisteredTool) -> dict[str, Any]:
         "function": {
             "name": tool.name,
             "description": tool.description,
-            "parameters": tool.parameters,
+            "parameters": deepcopy(tool.parameters),
         },
     }
 
@@ -457,7 +460,7 @@ def _tool_to_anthropic_schema(tool: RegisteredTool) -> dict[str, Any]:
     return {
         "name": tool.name,
         "description": tool.description,
-        "input_schema": tool.parameters,
+        "input_schema": deepcopy(tool.parameters),
     }
 
 
@@ -465,7 +468,7 @@ def _tool_to_gemini_schema(tool: RegisteredTool) -> dict[str, Any]:
     return {
         "name": tool.name,
         "description": tool.description,
-        "parameters": tool.parameters,
+        "parameters": deepcopy(tool.parameters),
     }
 
 
@@ -473,7 +476,7 @@ def _tool_to_json_schema(tool: RegisteredTool) -> dict[str, Any]:
     return {
         "name": tool.name,
         "description": tool.description,
-        "schema": cast(dict[str, Any], tool.parameters),
+        "schema": deepcopy(tool.parameters),
     }
 
 

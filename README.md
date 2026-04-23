@@ -104,6 +104,7 @@ schemas = tools.get_schemas("openai")  # or anthropic/gemini/json_schema
 **Output formats:**
 - OpenAI function calling format
 - Anthropic tool use format
+- Gemini function declaration format
 - Generic JSON schema
 
 #### 3. Tool Execution
