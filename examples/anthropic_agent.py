@@ -134,9 +134,7 @@ def run_agent() -> str:
             messages.append({"role": "assistant", "content": _assistant_content_blocks(response)})
             for result in results:
                 print("tool result", result["tool_name"], result["output"])
-            messages.append(
-                {"role": "user", "content": format_tool_results(results, "anthropic")}
-            )
+            messages.append({"role": "user", "content": format_tool_results(results, "anthropic")})
 
     raise RuntimeError("Agent loop exceeded max iterations")
 

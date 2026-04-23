@@ -46,10 +46,25 @@ class ToolEvent(TypedDict, total=False):
     error: str
 
 
-class ToolMessage(TypedDict):
+class _OpenAIToolMessage(TypedDict):
     role: Literal["tool"]
     tool_call_id: str | None
     content: str
+
+
+class _AnthropicToolResult(TypedDict, total=False):
+    type: Literal["tool_result"]
+    tool_use_id: str | None
+    content: str
+    is_error: bool
+
+
+class _GeminiToolResult(TypedDict):
+    name: str | None
+    response: dict[str, Any]
+
+
+ProviderToolResult = _OpenAIToolMessage | _AnthropicToolResult | _GeminiToolResult
 
 
 JSON_SCHEMA_TYPE_MAP: dict[type, str] = {
@@ -558,14 +573,16 @@ def _parse_gemini_tool_calls(message: Any) -> list[ToolCall]:
 def format_tool_results(
     results: list[ToolResult],
     provider: str = "openai",
-) -> list[dict[str, Any]]:
+) -> list[ProviderToolResult]:
     """Format tool results as provider-ready content/messages.
 
-    - ``openai``: list of ``{role: "tool", tool_call_id, content}`` messages
-      to extend the conversation directly.
-    - ``anthropic``: list of ``tool_result`` content blocks to wrap in a
-      single ``{"role": "user", "content": [...]}`` message.
-    - ``gemini``: list of ``{name, response}`` dicts to wrap in
+    Returns ``list[ProviderToolResult]``; the concrete shape varies by provider:
+
+    - ``openai``: ``{role, tool_call_id, content}`` messages to extend the
+      conversation directly.
+    - ``anthropic``: ``tool_result`` content blocks to wrap in a single
+      ``{"role": "user", "content": [...]}`` message.
+    - ``gemini``: ``{name, response}`` dicts to wrap in
       ``types.Part.from_function_response(**item)`` and a ``user`` ``Content``.
     """
 
@@ -575,7 +592,7 @@ def format_tool_results(
         )
 
     if provider == "openai":
-        formatted_openai: list[dict[str, Any]] = []
+        formatted_openai: list[_OpenAIToolMessage] = []
         for result in results:
             content = result["output"] if result["error"] is None else f"ERROR: {result['error']}"
             formatted_openai.append(
@@ -585,12 +602,12 @@ def format_tool_results(
                     "content": str(content),
                 }
             )
-        return formatted_openai
+        return list(formatted_openai)
 
     if provider == "anthropic":
-        formatted_anthropic: list[dict[str, Any]] = []
+        formatted_anthropic: list[_AnthropicToolResult] = []
         for result in results:
-            block: dict[str, Any] = {
+            block: _AnthropicToolResult = {
                 "type": "tool_result",
                 "tool_use_id": result["tool_call_id"],
             }
@@ -600,16 +617,16 @@ def format_tool_results(
                 block["content"] = f"ERROR: {result['error']}"
                 block["is_error"] = True
             formatted_anthropic.append(block)
-        return formatted_anthropic
+        return list(formatted_anthropic)
 
-    formatted_gemini: list[dict[str, Any]] = []
+    formatted_gemini: list[_GeminiToolResult] = []
     for result in results:
         if result["error"] is None:
             payload: dict[str, Any] = {"result": result["output"]}
         else:
             payload = {"error": result["error"]}
         formatted_gemini.append({"name": result["tool_name"], "response": payload})
-    return formatted_gemini
+    return list(formatted_gemini)
 
 
 def _normalize_call(tool_call: Mapping[str, Any]) -> tuple[str | None, str | None, dict[str, Any]]:
@@ -666,8 +683,11 @@ def _signature_to_json_schema(
 
         annotation = hints.get(param_name, param.annotation)
         pydantic_schema = _pydantic_schema_for(annotation)
+        dataclass_schema = _dataclass_schema_for(annotation)
         if pydantic_schema is not None:
             properties[param_name] = pydantic_schema
+        elif dataclass_schema is not None:
+            properties[param_name] = dataclass_schema
         else:
             properties[param_name] = {"type": _annotation_to_json_type(annotation)}
 
@@ -724,6 +744,28 @@ def _pydantic_schema_for(annotation: Any) -> dict[str, Any] | None:
     return schema
 
 
+def _dataclass_schema_for(annotation: Any) -> dict[str, Any] | None:
+    import dataclasses
+
+    if not dataclasses.is_dataclass(annotation):
+        return None
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for f in dataclasses.fields(annotation):
+        properties[f.name] = {"type": _annotation_to_json_type(f.type)}
+        if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING:
+            required.append(f.name)
+
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
 def _extract_coercions(
     sig: Signature,
     hints: dict[str, Any] | None = None,
@@ -737,6 +779,16 @@ def _extract_coercions(
             coercions[param_name] = lambda value, m=model: (
                 value if isinstance(value, m) else m.model_validate(value)
             )
+            continue
+
+        import dataclasses
+
+        if dataclasses.is_dataclass(annotation):
+            model = annotation
+            coercions[param_name] = lambda value, m=model: (
+                value if isinstance(value, m) else m(**value)
+            )
+
     return coercions
 
 

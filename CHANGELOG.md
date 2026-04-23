@@ -4,6 +4,13 @@
 
 ## v0.3.0 (Unreleased)
 
+- Zero runtime dependencies: baretools ships with no third-party packages on
+  the install path. Standard-library `dataclasses` are supported as tool
+  parameter types out-of-the-box; `pydantic` is opt-in via the
+  `baretools-ai[pydantic]` extra.
+- Dataclass parameters: tools may declare a `@dataclass` type as a parameter.
+  The dataclass fields are reflected into the JSON Schema and dict arguments
+  are coerced into the dataclass instance before the tool is invoked.
 - Pydantic model parameters: tools may declare a `pydantic.BaseModel` subclass
   as a parameter type. The model's JSON Schema is embedded in the tool schema,
   and dict arguments are validated/coerced via `model_validate()` before the
@@ -17,6 +24,10 @@
   register → schema → execute → return-results cycle.
 - Add optional W&B Weave tracing to the provider examples so developers can
   inspect agent-loop and tool-call traces without changing the library itself.
+- `parse_tool_calls(message, provider="openai" | "anthropic" | "gemini")` and
+  `format_tool_results(results, provider=...)` now cover all three providers.
+  Returns plain dicts (no SDK imports in core), so callers can wrap them in
+  `types.Part.from_function_response(...)` or an Anthropic user message.
 
 ## v0.2.0 (Unreleased)
 

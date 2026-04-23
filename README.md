@@ -88,7 +88,7 @@ def search_web(query: str, max_results: int = 5) -> str:
 
 **Capabilities:**
 - Automatic schema generation from type hints and docstrings
-- Support for Pydantic models as parameters
+- Native support for `dataclasses` (no extra deps); optional `pydantic` models when installed
 - Optional manual schema override
 - Validation of function signatures
 
@@ -110,14 +110,14 @@ gemini_tools = tools.get_schemas("gemini")  # [{"functionDeclarations": [...]}]
 
 #### 3. Tool Execution
 ```python
-# Parse LLM response
-tool_calls = parse_tool_calls(llm_response)
+# Parse provider-native response (provider="openai" | "anthropic" | "gemini")
+tool_calls = parse_tool_calls(llm_response, "openai")
 
 # Execute tools
 results = tools.execute(tool_calls)
 
-# Format for next LLM call
-formatted_results = format_tool_results(results)
+# Format results back into provider-shaped messages/content blocks
+formatted_results = format_tool_results(results, "openai")
 ```
 
 **Features:**
@@ -332,11 +332,13 @@ for result in results:
         print(f"Success: {result['output']}")
 ```
 
-### Pydantic Model Parameters
+### Dataclass and Pydantic Model Parameters
 ```python
-from pydantic import BaseModel
+from dataclasses import dataclass
+# Or `from pydantic import BaseModel`
 
-class Address(BaseModel):
+@dataclass
+class Address:
     street: str
     city: str
     zip: str
@@ -361,8 +363,8 @@ results = tools.execute([{
 }])
 ```
 
-`pydantic` is an optional dependency \u2014 only required if a tool actually
-declares a `BaseModel` parameter.
+Standard library `dataclasses` are supported out-of-the-box. `pydantic` is an optional dependency — only required if a tool actually
+declares a `BaseModel` parameter. To install with pydantic support, use `pip install "baretools-ai[pydantic]".
 
 ### Streaming Results as They Complete
 ```python

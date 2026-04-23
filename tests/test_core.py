@@ -443,6 +443,7 @@ def test_execute_async_parallel_and_retry() -> None:
 
 
 def test_pydantic_model_parameter_schema_and_coercion() -> None:
+    pytest.importorskip("pydantic")
     from pydantic import BaseModel
 
     class Address(BaseModel):
@@ -482,6 +483,7 @@ def test_pydantic_model_parameter_schema_and_coercion() -> None:
 
 
 def test_pydantic_validation_error_surfaces_as_tool_error() -> None:
+    pytest.importorskip("pydantic")
     from pydantic import BaseModel
 
     class Item(BaseModel):
@@ -561,3 +563,31 @@ def test_execute_stream_async_yields_as_completed() -> None:
     assert sorted(outputs) == [1, 2]
     assert outputs[0] == 2
 
+
+def test_dataclass_model_parameter_schema_and_coercion() -> None:
+    from dataclasses import dataclass
+
+    @dataclass
+    class Address:
+        street: str
+        city: str
+        zip: str
+
+    @tool
+    def create_user(name: str, address: Address) -> dict:
+        return {"name": name, "city": address.city, "zip": address.zip}
+
+    registry = ToolRegistry()
+    registry.register(create_user)
+
+    schema = registry.get_schemas("openai")[0]["function"]["parameters"]
+    assert schema["properties"]["name"] == {"type": "string"}
+    address_schema = schema["properties"]["address"]
+    assert address_schema["type"] == "object"
+    assert set(address_schema["properties"].keys()) == {"street", "city", "zip"}
+    assert sorted(address_schema["required"]) == ["city", "street", "zip"]
+
+    # Test coercion mapping dictionary back to the dataclass model
+    args = {"name": "Bob", "address": {"street": "123 Elm", "city": "NYC", "zip": "10001"}}
+    result = registry.execute([{"id": "test", "name": "create_user", "arguments": args}])[0]
+    assert result["output"] == {"name": "Bob", "city": "NYC", "zip": "10001"}

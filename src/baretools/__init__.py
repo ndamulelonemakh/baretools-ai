@@ -1,7 +1,9 @@
+from importlib.metadata import PackageNotFoundError, version
+
 from .core import (
+    ProviderToolResult,
     ToolCall,
     ToolEvent,
-    ToolMessage,
     ToolRegistry,
     ToolResult,
     format_tool_results,
@@ -9,7 +11,10 @@ from .core import (
     tool,
 )
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("baretools-ai")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "tool",
@@ -17,7 +22,7 @@ __all__ = [
     "ToolCall",
     "ToolResult",
     "ToolEvent",
-    "ToolMessage",
+    "ProviderToolResult",
     "parse_tool_calls",
     "format_tool_results",
     "__version__",
