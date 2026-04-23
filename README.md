@@ -107,11 +107,9 @@ uv run ruff check .
 uv run pytest -q
 ```
 
-CI runs `ruff`, `pytest`, and a package build on every push and PR to `main`.
-
 ## Contributing
 
-Baretools is intentionally minimal. Before proposing a feature, ask whether it belongs in *every* tool-calling app and whether a developer could implement it in a few lines themselves. If either answer is "no," it probably doesn't belong here. See [CONTRIBUTING](https://github.com/ndamulelonemakh/baretools-ai/blob/main/CONTRIBUTING.md) if present, otherwise open an issue first.
+Baretools is designed to be strictly minimal. Preferably, we only add features that are universally needed across tool-calling applications and difficult for developers to implement themselves. Please open an issue to discuss your idea before proposing a new feature.
 
 ## License
 
