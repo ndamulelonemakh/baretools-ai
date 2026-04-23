@@ -154,14 +154,15 @@ formatted_results = format_tool_results(results)
 ### 🔮 Phase 3: Developer Experience (v0.3.0)
 - [x] Async tool execution
 - [x] Built-in logging/tracing hooks
-- [ ] Pydantic model support
-- [ ] Streaming tool results
+- [x] Pydantic model support
+- [x] Streaming tool results
+- [x] Concrete provider examples and documentation
 
 ### 💡 Phase 4: Advanced (v0.4.0)
-- [ ] Tool composition (tools calling tools)
+- [ ] Tool composition (tools calling tools, tool search, programmatic tool calls)
 - [ ] Execution sandboxing options
-- [ ] Rate limiting helpers
 - [ ] Cost tracking utilities
+- [ ] Rate limiting helpers
 
 ---
 
@@ -329,6 +330,74 @@ for result in results:
         # You decide: retry? skip? fail? continue?
     else:
         print(f"Success: {result['output']}")
+```
+
+### Pydantic Model Parameters
+```python
+from pydantic import BaseModel
+
+class Address(BaseModel):
+    street: str
+    city: str
+    zip: str
+
+@tool
+def create_user(name: str, address: Address) -> dict:
+    return {"name": name, "city": address.city}
+
+tools = ToolRegistry()
+tools.register(create_user)
+
+# The address parameter is described as a JSON object in the schema,
+# and dict arguments from the LLM are validated into an Address instance
+# before create_user runs.
+results = tools.execute([{
+    "id": "c1",
+    "name": "create_user",
+    "arguments": {
+        "name": "Ada",
+        "address": {"street": "1 Infinite Loop", "city": "Cupertino", "zip": "95014"},
+    },
+}])
+```
+
+`pydantic` is an optional dependency \u2014 only required if a tool actually
+declares a `BaseModel` parameter.
+
+### Streaming Results as They Complete
+```python
+# Sync: yields ToolResult per call. With parallel=True, yields in completion order.
+for result in tools.execute_stream(tool_calls, parallel=True, max_workers=4):
+    handle(result)
+
+# Async equivalent
+async for result in tools.execute_stream_async(tool_calls, parallel=True, max_concurrency=4):
+    await handle(result)
+```
+
+### Provider Agent Loops
+
+Live, runnable provider examples now live in `examples/`:
+
+- `examples/openai_agent.py` shows OpenAI Chat Completions tool calling with `tools.get_schemas("openai", strict=True)`, `parse_tool_calls()`, and `ToolRegistry.execute()`.
+- `examples/anthropic_agent.py` shows Claude `tool_use` / `tool_result` handling with `tools.get_schemas("anthropic")`.
+- `examples/gemini_agent.py` shows Gemini `function_call` / `from_function_response` handling with `tools.get_schemas("gemini")`.
+
+Each script uses the same three BMI tools to show the same pattern across providers:
+
+1. The model receives plain user text.
+2. Baretools provides the provider-specific schema shape.
+3. The provider emits one or more tool calls.
+4. Baretools executes those calls, optionally in parallel.
+5. The tool outputs are fed back to the model for the next turn or final answer.
+
+Run them with real provider SDKs and API keys:
+
+```bash
+pip install openai anthropic google-genai
+OPENAI_API_KEY=... uv run python examples/openai_agent.py
+ANTHROPIC_API_KEY=... uv run python examples/anthropic_agent.py
+GOOGLE_API_KEY=... uv run python examples/gemini_agent.py
 ```
 
 ---

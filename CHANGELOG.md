@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v0.3.0 (Unreleased)
+
+- Pydantic model parameters: tools may declare a `pydantic.BaseModel` subclass
+  as a parameter type. The model's JSON Schema is embedded in the tool schema,
+  and dict arguments are validated/coerced via `model_validate()` before the
+  tool is invoked. Pydantic remains an optional dependency — it is only
+  required if you use this feature.
+- Add `ToolRegistry.execute_stream()` and `execute_stream_async()` that yield
+  `ToolResult` values as each call finishes (completion order when parallel,
+  input order otherwise).
+- Add live OpenAI, Anthropic, and Gemini example agent loops under `examples/`
+  showing how baretools turns provider-specific tool calls into the same
+  register → schema → execute → return-results cycle.
+
 ## v0.2.0 (Unreleased)
 
 - Add multi-provider tool schema support via `ToolRegistry.get_schemas(provider=...)`.

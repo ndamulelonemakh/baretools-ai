@@ -347,3 +347,124 @@ def test_execute_async_parallel_and_retry() -> None:
     outputs = sorted(r["output"] for r in results if r["error"] is None)
     assert outputs == [20, 30]
     assert max(r["attempts"] for r in results) >= 1
+
+
+def test_pydantic_model_parameter_schema_and_coercion() -> None:
+    from pydantic import BaseModel
+
+    class Address(BaseModel):
+        street: str
+        city: str
+        zip: str
+
+    @tool
+    def create_user(name: str, address: Address) -> dict:
+        return {"name": name, "city": address.city, "zip": address.zip}
+
+    registry = ToolRegistry()
+    registry.register(create_user)
+
+    schema = registry.get_schemas("openai")[0]["function"]["parameters"]
+    assert schema["properties"]["name"] == {"type": "string"}
+    address_schema = schema["properties"]["address"]
+    assert address_schema["type"] == "object"
+    assert set(address_schema["properties"].keys()) == {"street", "city", "zip"}
+    assert sorted(address_schema["required"]) == ["city", "street", "zip"]
+
+    result = registry.execute(
+        [
+            {
+                "id": "p1",
+                "name": "create_user",
+                "arguments": {
+                    "name": "Ada",
+                    "address": {"street": "1 Infinite Loop", "city": "Cupertino", "zip": "95014"},
+                },
+            }
+        ]
+    )[0]
+
+    assert result["error"] is None
+    assert result["output"] == {"name": "Ada", "city": "Cupertino", "zip": "95014"}
+
+
+def test_pydantic_validation_error_surfaces_as_tool_error() -> None:
+    from pydantic import BaseModel
+
+    class Item(BaseModel):
+        qty: int
+
+    @tool
+    def buy(item: Item) -> int:
+        return item.qty
+
+    registry = ToolRegistry()
+    registry.register(buy)
+
+    result = registry.execute(
+        [{"id": "p2", "name": "buy", "arguments": {"item": {"qty": "not-an-int"}}}]
+    )[0]
+
+    assert result["output"] is None
+    assert result["error"] is not None
+    assert "qty" in result["error"]
+
+
+def test_execute_stream_yields_results_as_completed() -> None:
+    @tool
+    def slow(n: int) -> int:
+        sleep(0.05 if n == 1 else 0.0)
+        return n
+
+    registry = ToolRegistry()
+    registry.register(slow)
+
+    calls = [
+        {"id": "s1", "name": "slow", "arguments": {"n": 1}},
+        {"id": "s2", "name": "slow", "arguments": {"n": 2}},
+    ]
+    yielded = list(registry.execute_stream(calls, parallel=True, max_workers=2))
+
+    assert sorted(r["output"] for r in yielded) == [1, 2]
+    assert yielded[0]["output"] == 2  # fast one finishes first
+
+
+def test_execute_stream_serial_preserves_order() -> None:
+    @tool
+    def echo(n: int) -> int:
+        return n
+
+    registry = ToolRegistry()
+    registry.register(echo)
+
+    calls = [{"id": str(i), "name": "echo", "arguments": {"n": i}} for i in range(3)]
+    outputs = [r["output"] for r in registry.execute_stream(calls)]
+    assert outputs == [0, 1, 2]
+
+
+def test_execute_stream_async_yields_as_completed() -> None:
+    @tool
+    async def slow_async(n: int) -> int:
+        await asyncio.sleep(0.05 if n == 1 else 0.0)
+        return n
+
+    registry = ToolRegistry()
+    registry.register(slow_async)
+
+    async def collect() -> list[int]:
+        out: list[int] = []
+        async for result in registry.execute_stream_async(
+            [
+                {"id": "a1", "name": "slow_async", "arguments": {"n": 1}},
+                {"id": "a2", "name": "slow_async", "arguments": {"n": 2}},
+            ],
+            parallel=True,
+            max_concurrency=2,
+        ):
+            out.append(result["output"])
+        return out
+
+    outputs = asyncio.run(collect())
+    assert sorted(outputs) == [1, 2]
+    assert outputs[0] == 2
+

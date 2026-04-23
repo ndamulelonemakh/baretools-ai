@@ -4,12 +4,22 @@ import asyncio
 import inspect
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from inspect import Signature, _empty, signature
 from time import perf_counter, sleep
-from typing import Any, Callable, Literal, Mapping, TypedDict, TypeVar
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    Literal,
+    Mapping,
+    TypedDict,
+    TypeVar,
+    get_type_hints,
+)
 
 
 class ToolCall(TypedDict, total=False):
@@ -62,6 +72,7 @@ class RegisteredTool:
     description: str
     function: Callable[..., Any]
     parameters: dict[str, Any]
+    coercions: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
 
 
 def tool(
@@ -105,12 +116,19 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool_name}' already registered")
 
         sig = signature(fn)
-        parameters = _signature_to_json_schema(sig)
+        caller_locals: dict[str, Any] = {}
+        frame = inspect.currentframe()
+        if frame is not None and frame.f_back is not None:
+            caller_locals = dict(frame.f_back.f_locals)
+        hints = _resolve_type_hints(fn, caller_locals)
+        parameters = _signature_to_json_schema(sig, hints)
+        coercions = _extract_coercions(sig, hints)
         self._tools[tool_name] = RegisteredTool(
             name=tool_name,
             description=description,
             function=fn,
             parameters=parameters,
+            coercions=coercions,
         )
 
     def get_schemas(
@@ -217,6 +235,77 @@ class ToolRegistry:
             for call in tool_calls
         ]
 
+    def execute_stream(
+        self,
+        tool_calls: list[ToolCall] | list[Mapping[str, Any]],
+        *,
+        parallel: bool = False,
+        max_workers: int | None = None,
+        retries: int = 0,
+        retry_delay_seconds: float = 0.0,
+    ) -> Iterator[ToolResult]:
+        """Yield results as each call finishes; order is completion order when parallel."""
+        if parallel and len(tool_calls) > 1:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = [
+                    pool.submit(
+                        self._execute_with_retry_sync,
+                        call,
+                        retries=retries,
+                        retry_delay_seconds=retry_delay_seconds,
+                    )
+                    for call in tool_calls
+                ]
+                for future in as_completed(futures):
+                    yield future.result()
+            return
+
+        for call in tool_calls:
+            yield self._execute_with_retry_sync(
+                call,
+                retries=retries,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+
+    async def execute_stream_async(
+        self,
+        tool_calls: list[ToolCall] | list[Mapping[str, Any]],
+        *,
+        parallel: bool = False,
+        max_concurrency: int | None = None,
+        retries: int = 0,
+        retry_delay_seconds: float = 0.0,
+    ) -> AsyncIterator[ToolResult]:
+        """Async generator yielding ToolResult values as each call finishes."""
+        if parallel and len(tool_calls) > 1:
+            semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
+
+            async def _run(call: Mapping[str, Any]) -> ToolResult:
+                if semaphore is None:
+                    return await self._execute_with_retry_async(
+                        call,
+                        retries=retries,
+                        retry_delay_seconds=retry_delay_seconds,
+                    )
+                async with semaphore:
+                    return await self._execute_with_retry_async(
+                        call,
+                        retries=retries,
+                        retry_delay_seconds=retry_delay_seconds,
+                    )
+
+            tasks = [asyncio.create_task(_run(call)) for call in tool_calls]
+            for completed in asyncio.as_completed(tasks):
+                yield await completed
+            return
+
+        for call in tool_calls:
+            yield await self._execute_with_retry_async(
+                call,
+                retries=retries,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+
     def _execute_with_retry_sync(
         self,
         tool_call: Mapping[str, Any],
@@ -248,7 +337,8 @@ class ToolRegistry:
                     }
                 )
 
-                output = registered_tool.function(**arguments)
+                coerced = _apply_coercions(arguments, registered_tool.coercions)
+                output = registered_tool.function(**coerced)
                 if inspect.isawaitable(output):
                     output = _run_awaitable_in_sync(output)
 
@@ -296,7 +386,8 @@ class ToolRegistry:
                     }
                 )
 
-                output = registered_tool.function(**arguments)
+                coerced = _apply_coercions(arguments, registered_tool.coercions)
+                output = registered_tool.function(**coerced)
                 if inspect.isawaitable(output):
                     output = await output
 
@@ -439,16 +530,24 @@ def _result(
     }
 
 
-def _signature_to_json_schema(sig: Signature) -> dict[str, Any]:
+def _signature_to_json_schema(
+    sig: Signature,
+    hints: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     required: list[str] = []
+    hints = hints or {}
 
     for param_name, param in sig.parameters.items():
         if param.kind not in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):
             raise TypeError(f"Unsupported parameter kind for '{param_name}': {param.kind}")
 
-        json_type = _annotation_to_json_type(param.annotation)
-        properties[param_name] = {"type": json_type}
+        annotation = hints.get(param_name, param.annotation)
+        pydantic_schema = _pydantic_schema_for(annotation)
+        if pydantic_schema is not None:
+            properties[param_name] = pydantic_schema
+        else:
+            properties[param_name] = {"type": _annotation_to_json_type(annotation)}
 
         if param.default is _empty:
             required.append(param_name)
@@ -459,6 +558,77 @@ def _signature_to_json_schema(sig: Signature) -> dict[str, Any]:
         "required": required,
         "additionalProperties": False,
     }
+
+
+def _pydantic_base_model() -> type | None:
+    try:
+        from pydantic import BaseModel
+    except ImportError:
+        return None
+    return BaseModel
+
+
+def _resolve_type_hints(
+    fn: Callable[..., Any],
+    extra_locals: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    localns: dict[str, Any] = {}
+    if extra_locals:
+        localns.update(extra_locals)
+    try:
+        closure = inspect.getclosurevars(fn)
+        localns.update(closure.nonlocals)
+        localns.update(closure.globals)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return get_type_hints(fn, localns=localns)
+    except Exception:
+        return {}
+
+
+def _is_pydantic_model(annotation: Any) -> bool:
+    base = _pydantic_base_model()
+    if base is None:
+        return False
+    return isinstance(annotation, type) and issubclass(annotation, base)
+
+
+def _pydantic_schema_for(annotation: Any) -> dict[str, Any] | None:
+    if not _is_pydantic_model(annotation):
+        return None
+    schema = annotation.model_json_schema()
+    schema.pop("title", None)
+    return schema
+
+
+def _extract_coercions(
+    sig: Signature,
+    hints: dict[str, Any] | None = None,
+) -> dict[str, Callable[[Any], Any]]:
+    coercions: dict[str, Callable[[Any], Any]] = {}
+    hints = hints or {}
+    for param_name, param in sig.parameters.items():
+        annotation = hints.get(param_name, param.annotation)
+        if _is_pydantic_model(annotation):
+            model = annotation
+            coercions[param_name] = lambda value, m=model: (
+                value if isinstance(value, m) else m.model_validate(value)
+            )
+    return coercions
+
+
+def _apply_coercions(
+    arguments: dict[str, Any],
+    coercions: dict[str, Callable[[Any], Any]],
+) -> dict[str, Any]:
+    if not coercions:
+        return arguments
+    coerced = dict(arguments)
+    for name, coerce in coercions.items():
+        if name in coerced:
+            coerced[name] = coerce(coerced[name])
+    return coerced
 
 
 def _tool_to_openai_schema(tool: RegisteredTool, *, strict: bool = False) -> dict[str, Any]:
