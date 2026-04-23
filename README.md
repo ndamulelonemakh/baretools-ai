@@ -1,8 +1,8 @@
-# [WIP] Baretools AI
+# Baretools AI
 
-**The un-framework for AI Agents**
+**The un-framework for AI Agents** — just the plumbing, no supply-chain baggage.
 
-Just the plumbing. You bring the intelligence.
+[**Documentation**](https://ndamulelonemakh.github.io/baretools-ai/) &nbsp;·&nbsp; [API Reference](https://ndamulelonemakh.github.io/baretools-ai/api-reference) &nbsp;·&nbsp; [Why Baretools?](https://ndamulelonemakh.github.io/baretools-ai/why-baretools) &nbsp;·&nbsp; [Changelog](https://ndamulelonemakh.github.io/baretools-ai/changelog)
 
 ---
 

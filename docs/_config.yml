@@ -1,0 +1,16 @@
+title: Baretools AI
+description: "Zero dependencies. The un-framework for AI Agents."
+theme: jekyll-theme-cayman
+show_downloads: false
+github:
+  repository_url: https://github.com/ndamulelonemakh/baretools-ai
+  repository_nwo: ndamulelonemakh/baretools-ai
+markdown: kramdown
+kramdown:
+  input: GFM
+  syntax_highlighter: rouge
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default

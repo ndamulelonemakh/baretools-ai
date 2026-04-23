@@ -23,7 +23,8 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/ndamulelonemakh/baretools-ai"
+Homepage = "https://ndamulelonemakh.github.io/baretools-ai/"
+Documentation = "https://ndamulelonemakh.github.io/baretools-ai/"
 Repository = "https://github.com/ndamulelonemakh/baretools-ai"
 Issues = "https://github.com/ndamulelonemakh/baretools-ai/issues"
 Changelog = "https://github.com/ndamulelonemakh/baretools-ai/blob/main/CHANGELOG.md"
