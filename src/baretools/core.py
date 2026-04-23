@@ -51,6 +51,8 @@ JSON_SCHEMA_TYPE_MAP: dict[type, str] = {
     dict: "object",
 }
 
+_SUPPORTED_PROVIDERS: tuple[str, ...] = ("openai", "anthropic", "gemini", "json_schema")
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 
@@ -114,26 +116,36 @@ class ToolRegistry:
     def get_schemas(
         self,
         provider: Literal["openai", "anthropic", "gemini", "json_schema"] = "openai",
+        *,
+        strict: bool = False,
     ) -> list[dict[str, Any]]:
-        supported_providers = {"openai", "anthropic", "gemini", "json_schema"}
-        if provider not in supported_providers:
+        if provider not in _SUPPORTED_PROVIDERS:
             raise ValueError(f"Unsupported provider: {provider}")
+        if strict and provider != "openai":
+            raise ValueError("strict=True is only supported for the 'openai' provider")
+
+        if not self._tools:
+            return []
 
         if provider == "gemini":
             declarations = [
-                _tool_to_gemini_function_declaration(tool) for tool in self._tools.values()
+                _tool_to_gemini_function_declaration(registered)
+                for registered in self._tools.values()
             ]
             return [{"functionDeclarations": declarations}]
 
-        schemas: list[dict[str, Any]] = []
-        for tool in self._tools.values():
-            if provider == "openai":
-                schemas.append(_tool_to_openai_schema(tool))
-            elif provider == "anthropic":
-                schemas.append(_tool_to_anthropic_schema(tool))
-            else:
-                schemas.append(_tool_to_json_schema(tool))
-        return schemas
+        if provider == "openai":
+            return [
+                _tool_to_openai_schema(registered, strict=strict)
+                for registered in self._tools.values()
+            ]
+
+        renderers = {
+            "anthropic": _tool_to_anthropic_schema,
+            "json_schema": _tool_to_json_schema,
+        }
+        render = renderers[provider]
+        return [render(registered) for registered in self._tools.values()]
 
     def execute(
         self,
@@ -449,13 +461,35 @@ def _signature_to_json_schema(sig: Signature) -> dict[str, Any]:
     }
 
 
-def _tool_to_openai_schema(tool: RegisteredTool) -> dict[str, Any]:
+def _tool_to_openai_schema(tool: RegisteredTool, *, strict: bool = False) -> dict[str, Any]:
+    parameters = deepcopy(tool.parameters)
+    if strict:
+        properties = parameters.get("properties") or {}
+        existing_required = set(parameters.get("required") or [])
+        for prop_name, prop_schema in properties.items():
+            if prop_name not in existing_required and isinstance(prop_schema, dict):
+                prop_type = prop_schema.get("type")
+                if isinstance(prop_type, str) and prop_type != "null":
+                    prop_schema["type"] = [prop_type, "null"]
+                elif isinstance(prop_type, list) and "null" not in prop_type:
+                    prop_schema["type"] = [*prop_type, "null"]
+        parameters["required"] = list(properties.keys())
+        parameters["additionalProperties"] = False
+        return {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": parameters,
+                "strict": True,
+            },
+        }
     return {
         "type": "function",
         "function": {
             "name": tool.name,
             "description": tool.description,
-            "parameters": deepcopy(tool.parameters),
+            "parameters": parameters,
         },
     }
 
@@ -469,11 +503,23 @@ def _tool_to_anthropic_schema(tool: RegisteredTool) -> dict[str, Any]:
 
 
 def _tool_to_gemini_function_declaration(tool: RegisteredTool) -> dict[str, Any]:
-    return {
+    declaration: dict[str, Any] = {
         "name": tool.name,
         "description": tool.description,
-        "parameters": deepcopy(tool.parameters),
     }
+    properties = tool.parameters.get("properties") or {}
+    if not properties:
+        return declaration
+
+    parameters: dict[str, Any] = {
+        "type": "object",
+        "properties": deepcopy(properties),
+    }
+    required = tool.parameters.get("required") or []
+    if required:
+        parameters["required"] = list(required)
+    declaration["parameters"] = parameters
+    return declaration
 
 
 def _tool_to_json_schema(tool: RegisteredTool) -> dict[str, Any]:
