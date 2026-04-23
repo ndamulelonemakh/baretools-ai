@@ -709,3 +709,68 @@ def test_execute_stream_parallel_handles_large_batches_of_tool_calls() -> None:
     assert len(streamed) == len(calls)
     assert all(result["error"] is None for result in streamed)
     assert sorted(result["output"] for result in streamed) == list(range(150))
+
+
+def test_registry_rejects_invalid_overload_limits() -> None:
+    with pytest.raises(ValueError, match="max_tool_calls_per_batch"):
+        ToolRegistry(max_tool_calls_per_batch=0)
+
+    with pytest.raises(ValueError, match="max_argument_payload_chars"):
+        ToolRegistry(max_argument_payload_chars=0)
+
+
+def test_execute_rejects_batches_larger_than_configured_limit() -> None:
+    @tool
+    def identity(n: int) -> int:
+        return n
+
+    registry = ToolRegistry(max_tool_calls_per_batch=2)
+    registry.register(identity)
+
+    calls = [
+        {"id": "c1", "name": "identity", "arguments": {"n": 1}},
+        {"id": "c2", "name": "identity", "arguments": {"n": 2}},
+        {"id": "c3", "name": "identity", "arguments": {"n": 3}},
+    ]
+
+    with pytest.raises(ValueError, match="Too many tool calls"):
+        registry.execute(calls)
+
+
+
+def test_execute_rejects_argument_payloads_over_configured_limit() -> None:
+    @tool
+    def echo(text: str) -> str:
+        return text
+
+    registry = ToolRegistry(max_argument_payload_chars=20)
+    registry.register(echo)
+
+    with pytest.raises(ValueError, match="payload exceeds limit"):
+        registry.execute(
+            [
+                {
+                    "id": "big-args",
+                    "name": "echo",
+                    "arguments": {"text": "x" * 100},
+                }
+            ]
+        )
+
+
+
+def test_execute_stream_rejects_batches_larger_than_configured_limit() -> None:
+    @tool
+    def identity(n: int) -> int:
+        return n
+
+    registry = ToolRegistry(max_tool_calls_per_batch=1)
+    registry.register(identity)
+
+    calls = [
+        {"id": "s1", "name": "identity", "arguments": {"n": 1}},
+        {"id": "s2", "name": "identity", "arguments": {"n": 2}},
+    ]
+
+    with pytest.raises(ValueError, match="Too many tool calls"):
+        list(registry.execute_stream(calls))

@@ -115,10 +115,19 @@ class ToolRegistry:
         *,
         logger: logging.Logger | None = None,
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        max_tool_calls_per_batch: int | None = None,
+        max_argument_payload_chars: int | None = None,
     ) -> None:
+        if max_tool_calls_per_batch is not None and max_tool_calls_per_batch <= 0:
+            raise ValueError("max_tool_calls_per_batch must be > 0")
+        if max_argument_payload_chars is not None and max_argument_payload_chars <= 0:
+            raise ValueError("max_argument_payload_chars must be > 0")
+
         self._tools: dict[str, RegisteredTool] = {}
         self._logger = logger or logging.getLogger(__name__)
         self._on_event = on_event
+        self._max_tool_calls_per_batch = max_tool_calls_per_batch
+        self._max_argument_payload_chars = max_argument_payload_chars
 
     def register(self, fn: Callable[..., Any]) -> None:
         if not callable(fn):
@@ -190,6 +199,8 @@ class ToolRegistry:
         retry_delay_seconds: float = 0.0,
     ) -> list[ToolResult]:
         """Sync execution API; supports both sync and async tool functions."""
+        self._validate_tool_calls(tool_calls)
+
         if parallel and len(tool_calls) > 1:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 return list(
@@ -222,6 +233,8 @@ class ToolRegistry:
         retry_delay_seconds: float = 0.0,
     ) -> list[ToolResult]:
         """Async execution API; use this from existing async agent loops."""
+        self._validate_tool_calls(tool_calls)
+
         if parallel and len(tool_calls) > 1:
             semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
 
@@ -260,6 +273,8 @@ class ToolRegistry:
         retry_delay_seconds: float = 0.0,
     ) -> Iterator[ToolResult]:
         """Yield results as each call finishes; order is completion order when parallel."""
+        self._validate_tool_calls(tool_calls)
+
         if parallel and len(tool_calls) > 1:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
                 futures = [
@@ -292,6 +307,8 @@ class ToolRegistry:
         retry_delay_seconds: float = 0.0,
     ) -> AsyncIterator[ToolResult]:
         """Async generator yielding ToolResult values as each call finishes."""
+        self._validate_tool_calls(tool_calls)
+
         if parallel and len(tool_calls) > 1:
             semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
 
@@ -462,6 +479,32 @@ class ToolRegistry:
     def _emit_event(self, event: ToolEvent) -> None:
         if self._on_event is not None:
             self._on_event(event)
+
+    def _validate_tool_calls(self, tool_calls: list[ToolCall] | list[Mapping[str, Any]]) -> None:
+        if self._max_tool_calls_per_batch is not None and len(tool_calls) > self._max_tool_calls_per_batch:
+            raise ValueError(
+                "Too many tool calls in batch "
+                f"({len(tool_calls)} > {self._max_tool_calls_per_batch})"
+            )
+
+        if self._max_argument_payload_chars is None:
+            return
+
+        for idx, tool_call in enumerate(tool_calls):
+            arguments = tool_call.get("arguments", {})
+            if isinstance(arguments, str):
+                payload_size = len(arguments)
+            else:
+                try:
+                    payload_size = len(json.dumps(arguments))
+                except TypeError:
+                    payload_size = len(str(arguments))
+
+            if payload_size > self._max_argument_payload_chars:
+                raise ValueError(
+                    "Tool call arguments payload exceeds limit "
+                    f"at index {idx} ({payload_size} > {self._max_argument_payload_chars})"
+                )
 
 
 def parse_tool_calls(message: Any, provider: str = "openai") -> list[ToolCall]:
