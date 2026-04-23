@@ -6,6 +6,8 @@ title: Baretools AI — The un-framework for AI Agents
 
 **The un-framework for AI Agents** — just the plumbing, no supply-chain baggage.
 
+Status: Alpha. Python 3.10-3.13. Zero runtime dependencies. CI runs `ruff`, `pytest`, and package builds on every push and pull request to `main`.
+
 **[Get Started](getting-started)** &nbsp;·&nbsp; **[Why Baretools?](why-baretools)** &nbsp;·&nbsp; **[Concepts](concepts)** &nbsp;·&nbsp; **[Provider Integrations](providers)** &nbsp;·&nbsp; **[API Reference](api-reference)** &nbsp;·&nbsp; **[Changelog](changelog)**
 
 ---

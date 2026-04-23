@@ -2,6 +2,8 @@
 
 **The un-framework for AI Agents** — just the plumbing, no supply-chain baggage.
 
+Status: Alpha. Python 3.10-3.13. Zero runtime dependencies. CI runs `ruff`, `pytest`, and package builds on every push and pull request to `main`.
+
 [**Documentation**](https://ndamulelonemakh.github.io/baretools-ai/) &nbsp;·&nbsp; [API Reference](https://ndamulelonemakh.github.io/baretools-ai/api-reference) &nbsp;·&nbsp; [Why Baretools?](https://ndamulelonemakh.github.io/baretools-ai/why-baretools) &nbsp;·&nbsp; [Changelog](https://ndamulelonemakh.github.io/baretools-ai/changelog)
 
 ---
@@ -173,13 +175,16 @@ GitHub Actions now uses `uv` to run `ruff check .` and `pytest -q` on pushes and
 
 ---
 
-## Current Implementation Status
+## Current Branch Status
 
-This repository now includes a minimal `v0.1.0` implementation in `src/baretools` with:
+The `main` branch currently targets `v0.3.0` and includes:
 - `@tool` decorator metadata
-- `ToolRegistry.register()` schema generation
-- `ToolRegistry.execute()` with optional parallel execution
-- `parse_tool_calls()` and `format_tool_results()` helpers
+- Multi-provider schemas for OpenAI, Anthropic, Gemini, and generic JSON Schema
+- Sync and async execution APIs, including streaming helpers
+- Dataclass support out-of-the-box and optional Pydantic model support
+- `parse_tool_calls()` and `format_tool_results()` helpers for all supported providers
+
+Release history and unreleased changes are tracked in `CHANGELOG.md`.
 
 Run locally:
 ```bash
@@ -310,7 +315,7 @@ results = registry.execute(
 
 ### Parallel Execution
 ```python
-# Baretools executes in parallel by default
+# Parallel execution is opt-in
 tool_calls = [
     {"name": "search_web", "arguments": {"query": "AI news"}},
     {"name": "search_web", "arguments": {"query": "Python tips"}},
@@ -364,7 +369,7 @@ results = tools.execute([{
 ```
 
 Standard library `dataclasses` are supported out-of-the-box. `pydantic` is an optional dependency — only required if a tool actually
-declares a `BaseModel` parameter. To install with pydantic support, use `pip install "baretools-ai[pydantic]".
+declares a `BaseModel` parameter. To install with pydantic support, use `pip install "baretools-ai[pydantic]"`.
 
 ### Streaming Results as They Complete
 ```python

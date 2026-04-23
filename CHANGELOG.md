@@ -2,7 +2,7 @@
 
 <!-- version list -->
 
-## v0.3.0 (Unreleased)
+## v0.3.0 (Current branch target)
 
 - Zero runtime dependencies: baretools ships with no third-party packages on
   the install path. Standard-library `dataclasses` are supported as tool
@@ -29,7 +29,7 @@
   Returns plain dicts (no SDK imports in core), so callers can wrap them in
   `types.Part.from_function_response(...)` or an Anthropic user message.
 
-## v0.2.0 (Unreleased)
+## v0.2.0
 
 - Add multi-provider tool schema support via `ToolRegistry.get_schemas(provider=...)`.
   Supported providers: `openai` (default), `anthropic`, `gemini`, `json_schema`.

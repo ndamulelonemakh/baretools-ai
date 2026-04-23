@@ -8,7 +8,7 @@ title: Changelog — Baretools AI
 
 ---
 
-## v0.3.0 (Unreleased)
+## v0.3.0 (Current branch target)
 
 - **Zero runtime dependencies**: `pip install baretools-ai` installs nothing but the package itself. Standard-library `dataclasses` work as tool parameter types out-of-the-box; Pydantic is opt-in via `baretools-ai[pydantic]`.
 - **Dataclass parameters**: `@dataclass` fields are reflected into the JSON Schema and dict arguments from the LLM are coerced into the dataclass instance before invocation.
@@ -19,7 +19,7 @@ title: Changelog — Baretools AI
 - **Optional W&B Weave tracing**: gated on `WEAVE_PROJECT` env var; zero overhead when unset.
 - **Version from metadata**: `baretools.__version__` reads from `importlib.metadata`; `pyproject.toml` is the single source of truth.
 
-## v0.2.0 (Unreleased)
+## v0.2.0
 
 - Multi-provider schema support via `ToolRegistry.get_schemas(provider=...)`.
 - Gemini output uses the `functionDeclarations` shape with OpenAPI subset compliance.

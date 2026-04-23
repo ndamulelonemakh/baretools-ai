@@ -49,7 +49,7 @@ tools.register(calculate_bmi)
 
 ```python
 openai_schemas    = tools.get_schemas("openai")     # OpenAI / OpenAI-compatible
-anthropoc_schemas = tools.get_schemas("anthropic")  # Claude
+anthropic_schemas = tools.get_schemas("anthropic")  # Claude
 gemini_schemas    = tools.get_schemas("gemini")     # Gemini
 ```
 
