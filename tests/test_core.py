@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from time import perf_counter, sleep
 
+import pytest
+
 from baretools import ToolRegistry, format_tool_results, tool
 
 
@@ -28,6 +30,176 @@ def test_schema_generation_and_execution() -> None:
     assert results[0]["error"] is None
     assert results[0]["output"] == 5
     assert results[0]["attempts"] == 1
+
+
+def test_schema_generation_for_multiple_providers() -> None:
+    @tool
+    def add(a: int, b: int = 1) -> int:
+        """Add two numbers"""
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    openai_schemas = registry.get_schemas("openai")
+    anthropic_schemas = registry.get_schemas("anthropic")
+    gemini_schemas = registry.get_schemas("gemini")
+    json_schemas = registry.get_schemas("json_schema")
+
+    assert openai_schemas[0]["type"] == "function"
+    assert openai_schemas[0]["function"]["name"] == "add"
+
+    assert anthropic_schemas[0]["name"] == "add"
+    assert anthropic_schemas[0]["input_schema"]["type"] == "object"
+
+    assert len(gemini_schemas) == 1
+    assert gemini_schemas[0]["functionDeclarations"][0]["name"] == "add"
+    assert (
+        gemini_schemas[0]["functionDeclarations"][0]["parameters"]["properties"]["a"]["type"]
+        == "integer"
+    )
+
+    assert json_schemas[0]["name"] == "add"
+    assert json_schemas[0]["schema"]["required"] == ["a"]
+
+
+def test_get_schemas_rejects_unknown_provider() -> None:
+    @tool
+    def ping() -> str:
+        return "pong"
+
+    registry = ToolRegistry()
+    registry.register(ping)
+
+    with pytest.raises(ValueError, match="Unsupported provider"):
+        registry.get_schemas("unsupported")  # type: ignore[arg-type]
+
+
+def test_get_schemas_rejects_unknown_provider_when_registry_is_empty() -> None:
+    registry = ToolRegistry()
+
+    with pytest.raises(ValueError, match="Unsupported provider"):
+        registry.get_schemas("unsupported")  # type: ignore[arg-type]
+
+
+def test_get_schemas_returns_empty_list_for_empty_registry() -> None:
+    registry = ToolRegistry()
+
+    assert registry.get_schemas("openai") == []
+    assert registry.get_schemas("anthropic") == []
+    assert registry.get_schemas("gemini") == []
+    assert registry.get_schemas("json_schema") == []
+
+
+def test_openai_strict_mode_marks_all_required_and_unions_optionals_with_null() -> None:
+    @tool
+    def add(a: int, b: int = 1) -> int:
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    schema = registry.get_schemas("openai", strict=True)[0]
+    assert schema["function"]["strict"] is True
+    params = schema["function"]["parameters"]
+    assert params["additionalProperties"] is False
+    assert sorted(params["required"]) == ["a", "b"]
+    assert params["properties"]["a"]["type"] == "integer"
+    assert params["properties"]["b"]["type"] == ["integer", "null"]
+
+
+def test_openai_default_is_not_strict() -> None:
+    @tool
+    def add(a: int, b: int = 1) -> int:
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    schema = registry.get_schemas("openai")[0]
+    assert "strict" not in schema["function"]
+    assert schema["function"]["parameters"]["required"] == ["a"]
+
+
+def test_strict_rejected_for_non_openai_providers() -> None:
+    @tool
+    def ping() -> str:
+        return "pong"
+
+    registry = ToolRegistry()
+    registry.register(ping)
+
+    for provider in ("anthropic", "gemini", "json_schema"):
+        with pytest.raises(ValueError, match="strict=True"):
+            registry.get_schemas(provider, strict=True)  # type: ignore[arg-type]
+
+
+def test_get_schemas_returns_defensive_copies() -> None:
+    @tool
+    def add(a: int, b: int = 1) -> int:
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    openai_schemas = registry.get_schemas("openai")
+    openai_schemas[0]["function"]["parameters"]["properties"]["a"]["type"] = "string"
+
+    fresh_openai_schemas = registry.get_schemas("openai")
+    assert fresh_openai_schemas[0]["function"]["parameters"]["properties"]["a"]["type"] == "integer"
+
+    anthropic_schemas = registry.get_schemas("anthropic")
+    anthropic_schemas[0]["input_schema"]["properties"]["a"]["type"] = "string"
+
+    fresh_anthropic_schemas = registry.get_schemas("anthropic")
+    assert fresh_anthropic_schemas[0]["input_schema"]["properties"]["a"]["type"] == "integer"
+
+    gemini_schemas = registry.get_schemas("gemini")
+    gemini_schemas[0]["functionDeclarations"][0]["parameters"]["properties"]["a"]["type"] = "string"
+
+    fresh_gemini_schemas = registry.get_schemas("gemini")
+    assert (
+        fresh_gemini_schemas[0]["functionDeclarations"][0]["parameters"]["properties"]["a"]["type"]
+        == "integer"
+    )
+
+
+def test_gemini_schema_omits_additional_properties() -> None:
+    @tool
+    def add(a: int, b: int = 1) -> int:
+        return a + b
+
+    registry = ToolRegistry()
+    registry.register(add)
+
+    declaration = registry.get_schemas("gemini")[0]["functionDeclarations"][0]
+    assert "additionalProperties" not in declaration["parameters"]
+    assert declaration["parameters"]["required"] == ["a"]
+
+
+def test_gemini_schema_omits_parameters_for_zero_arg_tools() -> None:
+    @tool
+    def ping() -> str:
+        return "pong"
+
+    registry = ToolRegistry()
+    registry.register(ping)
+
+    declaration = registry.get_schemas("gemini")[0]["functionDeclarations"][0]
+    assert declaration == {"name": "ping", "description": ""}
+
+
+def test_gemini_schema_omits_empty_required() -> None:
+    @tool
+    def greet(name: str = "world") -> str:
+        return f"hello {name}"
+
+    registry = ToolRegistry()
+    registry.register(greet)
+
+    declaration = registry.get_schemas("gemini")[0]["functionDeclarations"][0]
+    assert "required" not in declaration["parameters"]
+    assert declaration["parameters"]["properties"] == {"name": {"type": "string"}}
 
 
 def test_error_is_captured() -> None:
