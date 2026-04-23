@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: github.repository == 'ndamulelonemakh/baretools-ai'
+    permissions:
+      contents: write
+      id-token: write
+      models: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dev dependencies
+        run: uv sync --group dev
+
+      - name: Determine next version
+        id: next
+        run: |
+          NEXT=$(uv run semantic-release --noop version --print 2>/dev/null | tail -n1)
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          if [ -n "$NEXT" ] && [ "$NEXT" != "0.0.0" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Collect commits since last tag
+        if: steps.next.outputs.should_release == 'true'
+        id: commits
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            RANGE="${LAST_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          {
+            echo 'log<<COMMITS_EOF'
+            git log --no-merges --pretty=format:'- %s (%h)' "$RANGE"
+            echo
+            echo 'COMMITS_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes with GitHub Models
+        if: steps.next.outputs.should_release == 'true'
+        id: ai_notes
+        uses: actions/ai-inference@v1
+        with:
+          model: openai/gpt-4o-mini
+          system-prompt: |
+            You are a release-notes editor for an open-source Python library.
+            Rewrite the provided conventional-commit log into clear, user-facing
+            release notes in GitHub-flavored Markdown.
+
+            Rules:
+            - Group under: ## Features, ## Bug Fixes, ## Performance, ## Other.
+            - Omit empty sections.
+            - One concise bullet per change. Strip the conventional-commit prefix.
+            - Preserve the short SHA at the end of each bullet.
+            - No marketing language. No emojis. No preamble or closing remarks.
+          prompt: |
+            Version: v${{ steps.next.outputs.version }}
+
+            Commits since last release:
+            ${{ steps.commits.outputs.log }}
+
+      - name: Save AI release notes
+        if: steps.next.outputs.should_release == 'true'
+        run: |
+          mkdir -p .release
+          cat > .release/notes.md <<'NOTES_EOF'
+          ${{ steps.ai_notes.outputs.response }}
+          NOTES_EOF
+
+      - name: Python Semantic Release (tag + build + changelog)
+        if: steps.next.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run semantic-release version --no-vcs-release
+
+      - name: Publish to PyPI (Trusted Publisher)
+        if: steps.next.outputs.should_release == 'true' && hashFiles('dist/*') != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+      - name: Create GitHub Release with AI-enhanced notes
+        if: steps.next.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.next.outputs.version }}" \
+            --title "v${{ steps.next.outputs.version }}" \
+            --notes-file .release/notes.md \
+            dist/*
