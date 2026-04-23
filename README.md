@@ -400,6 +400,18 @@ ANTHROPIC_API_KEY=... uv run python examples/anthropic_agent.py
 GOOGLE_API_KEY=... uv run python examples/gemini_agent.py
 ```
 
+Optional Weights & Biases tracing is supported in all three examples:
+
+```bash
+pip install weave wandb
+WANDB_API_KEY=... WEAVE_PROJECT=baretools-ai-examples \
+    OPENAI_API_KEY=... uv run python examples/openai_agent.py
+```
+
+When `WEAVE_PROJECT` is set, each example traces the agent loop and each baretools
+tool execution. OpenAI and Anthropic SDK calls are also auto-traced by Weave,
+so developers can inspect both the model turns and the tool spans in W&B.
+
 ---
 
 ## Philosophy

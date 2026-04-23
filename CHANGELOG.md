@@ -15,6 +15,8 @@
 - Add live OpenAI, Anthropic, and Gemini example agent loops under `examples/`
   showing how baretools turns provider-specific tool calls into the same
   register → schema → execute → return-results cycle.
+- Add optional W&B Weave tracing to the provider examples so developers can
+  inspect agent-loop and tool-call traces without changing the library itself.
 
 ## v0.2.0 (Unreleased)
 

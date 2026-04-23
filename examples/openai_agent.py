@@ -10,9 +10,45 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Literal
+from contextlib import nullcontext
+from typing import Any, Callable, Literal
 
 from baretools import ToolRegistry, parse_tool_calls, tool
+
+TraceDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
+
+
+def _noop_trace_op(*_args: Any, **_kwargs: Any) -> TraceDecorator:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        return func
+
+    return decorator
+
+
+def _noop_trace_attributes(_attrs: dict[str, Any]) -> Any:
+    return nullcontext()
+
+
+def _setup_weave() -> tuple[
+    Callable[..., TraceDecorator],
+    Callable[[dict[str, Any]], Any],
+]:
+    project = os.environ.get("WEAVE_PROJECT", "baretools-ai-examples")
+    if not project:
+        return _noop_trace_op, _noop_trace_attributes
+
+    try:
+        import weave
+    except ImportError as exc:
+        raise RuntimeError(
+            "WEAVE_PROJECT is set, but `weave` is not installed. Run `pip install weave wandb`."
+        ) from exc
+
+    weave.init(project)
+    return weave.op, weave.attributes
+
+
+TRACE_OP, TRACE_ATTRIBUTES = _setup_weave()
 
 SYSTEM_PROMPT = (
     "You are a careful health assistant. Use tools instead of mental math. "
@@ -23,6 +59,7 @@ USER_PROMPT = "I weigh 180 lb and I'm 5 ft 11 in. Am I healthy?"
 
 
 @tool
+@TRACE_OP()
 def to_metric(value: float, unit: Literal["kg", "lb", "m", "cm", "ft", "in"]) -> dict:
     factors = {
         "kg": (1.0, "kg"),
@@ -37,12 +74,14 @@ def to_metric(value: float, unit: Literal["kg", "lb", "m", "cm", "ft", "in"]) ->
 
 
 @tool
+@TRACE_OP()
 def compute_bmi(weight_kg: float, height_m: float) -> dict:
     bmi = weight_kg / (height_m * height_m)
     return {"bmi": round(bmi, 1)}
 
 
 @tool
+@TRACE_OP()
 def bmi_category(bmi: float) -> dict:
     if bmi < 18.5:
         return {"category": "underweight"}
@@ -67,6 +106,7 @@ def _content_for_model(value: Any) -> str:
     return str(value)
 
 
+@TRACE_OP()
 def run_agent() -> str:
     from openai import OpenAI
 
@@ -78,32 +118,33 @@ def run_agent() -> str:
         {"role": "user", "content": USER_PROMPT},
     ]
 
-    for _ in range(6):
-        response = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=registry.get_schemas("openai", strict=True),
-        )
-        message = response.choices[0].message
-        tool_calls = parse_tool_calls(message)
-        if not tool_calls:
-            return message.content or ""
-
-        print("assistant requested", [call["name"] for call in tool_calls])
-        results = registry.execute(tool_calls, parallel=True)
-        messages.append(message.model_dump(exclude_none=True))
-        for result in results:
-            print("tool result", result["tool_name"], result["output"])
-            content = result["output"]
-            if result["error"] is not None:
-                content = {"error": result["error"]}
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": result["tool_call_id"],
-                    "content": _content_for_model(content),
-                }
+    with TRACE_ATTRIBUTES({"provider": "openai", "example": "bmi"}):
+        for _ in range(6):
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=registry.get_schemas("openai", strict=True),
             )
+            message = response.choices[0].message
+            tool_calls = parse_tool_calls(message)
+            if not tool_calls:
+                return message.content or ""
+
+            print("assistant requested", [call["name"] for call in tool_calls])
+            results = registry.execute(tool_calls, parallel=True)
+            messages.append(message.model_dump(exclude_none=True))
+            for result in results:
+                print("tool result", result["tool_name"], result["output"])
+                content = result["output"]
+                if result["error"] is not None:
+                    content = {"error": result["error"]}
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": result["tool_call_id"],
+                        "content": _content_for_model(content),
+                    }
+                )
 
     raise RuntimeError("Agent loop exceeded max iterations")
 

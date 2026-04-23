@@ -3,15 +3,51 @@
 Install: pip install google-genai
 Run: GOOGLE_API_KEY=... python examples/gemini_agent.py
     Or uv run --env-file .env -- python examples/gemini_agent.py
-Optional: GEMINI_MODEL=gemini-2.5-flash
+Optional: GEMINI_MODEL=gemini-3-flash-preview
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any, Literal
+from contextlib import nullcontext
+from typing import Any, Callable, Literal
 
 from baretools import ToolRegistry, tool
+
+TraceDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
+
+
+def _noop_trace_op(*_args: Any, **_kwargs: Any) -> TraceDecorator:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        return func
+
+    return decorator
+
+
+def _noop_trace_attributes(_attrs: dict[str, Any]) -> Any:
+    return nullcontext()
+
+
+def _setup_weave() -> tuple[
+    Callable[..., TraceDecorator],
+    Callable[[dict[str, Any]], Any],
+]:
+    project = os.environ.get("WEAVE_PROJECT", "baretools-ai-examples")
+    if not project:
+        return _noop_trace_op, _noop_trace_attributes
+
+    try:
+        import weave
+    except ImportError as exc:
+        raise RuntimeError(
+            "WEAVE_PROJECT is set, but `weave` is not installed. Run `pip install weave wandb`."
+        ) from exc
+
+    weave.init(project)
+    return weave.op, weave.attributes
+
+
+TRACE_OP, TRACE_ATTRIBUTES = _setup_weave()
 
 USER_PROMPT = (
     "You are a careful health assistant. Use tools instead of mental math. "
@@ -22,6 +58,7 @@ USER_PROMPT = (
 
 
 @tool
+@TRACE_OP()
 def to_metric(value: float, unit: Literal["kg", "lb", "m", "cm", "ft", "in"]) -> dict:
     factors = {
         "kg": (1.0, "kg"),
@@ -36,12 +73,14 @@ def to_metric(value: float, unit: Literal["kg", "lb", "m", "cm", "ft", "in"]) ->
 
 
 @tool
+@TRACE_OP()
 def compute_bmi(weight_kg: float, height_m: float) -> dict:
     bmi = weight_kg / (height_m * height_m)
     return {"bmi": round(bmi, 1)}
 
 
 @tool
+@TRACE_OP()
 def bmi_category(bmi: float) -> dict:
     if bmi < 18.5:
         return {"category": "underweight"}
@@ -72,12 +111,13 @@ def _function_calls(response: Any) -> list[Any]:
     return calls
 
 
+@TRACE_OP()
 def run_agent() -> str:
     from google import genai
     from google.genai import types
 
     client = genai.Client()
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
     registry = build_registry()
     declarations = registry.get_schemas("gemini")[0]["functionDeclarations"]
     config = types.GenerateContentConfig(
@@ -86,38 +126,38 @@ def run_agent() -> str:
     )
     contents: list[Any] = [types.Content(role="user", parts=[types.Part(text=USER_PROMPT)])]
 
-    for _ in range(6):
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=config,
-        )
-        function_calls = _function_calls(response)
-        if not function_calls:
-            return response.text or ""
-
-        tool_calls = [
-            {"id": call.id, "name": call.name, "arguments": dict(call.args)}
-            for call in function_calls
-        ]
-        print("assistant requested", [call["name"] for call in tool_calls])
-        results = registry.execute(tool_calls, parallel=True)
-        contents.append(response.candidates[0].content)
-
-        parts = []
-        for result in results:
-            print("tool result", result["tool_name"], result["output"])
-            payload = {"result": result["output"]}
-            if result["error"] is not None:
-                payload = {"error": result["error"]}
-            parts.append(
-                types.Part.from_function_response(
-                    id=result["tool_call_id"],
-                    name=result["tool_name"],
-                    response=payload,
-                )
+    with TRACE_ATTRIBUTES({"provider": "gemini", "example": "bmi"}):
+        for _ in range(6):
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config,
             )
-        contents.append(types.Content(role="user", parts=parts))
+            function_calls = _function_calls(response)
+            if not function_calls:
+                return response.text or ""
+
+            tool_calls = [
+                {"id": call.id, "name": call.name, "arguments": dict(call.args)}
+                for call in function_calls
+            ]
+            print("assistant requested", [call["name"] for call in tool_calls])
+            results = registry.execute(tool_calls, parallel=True)
+            contents.append(response.candidates[0].content)
+
+            parts = []
+            for result in results:
+                print("tool result", result["tool_name"], result["output"])
+                payload = {"result": result["output"]}
+                if result["error"] is not None:
+                    payload = {"error": result["error"]}
+                parts.append(
+                    types.Part.from_function_response(
+                        name=result["tool_name"],
+                        response=payload,
+                    )
+                )
+            contents.append(types.Content(role="user", parts=parts))
 
     raise RuntimeError("Agent loop exceeded max iterations")
 
