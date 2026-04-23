@@ -50,8 +50,12 @@ def test_schema_generation_for_multiple_providers() -> None:
     assert anthropic_schemas[0]["name"] == "add"
     assert anthropic_schemas[0]["input_schema"]["type"] == "object"
 
-    assert gemini_schemas[0]["name"] == "add"
-    assert gemini_schemas[0]["parameters"]["properties"]["a"]["type"] == "integer"
+    assert len(gemini_schemas) == 1
+    assert gemini_schemas[0]["functionDeclarations"][0]["name"] == "add"
+    assert (
+        gemini_schemas[0]["functionDeclarations"][0]["parameters"]["properties"]["a"]["type"]
+        == "integer"
+    )
 
     assert json_schemas[0]["name"] == "add"
     assert json_schemas[0]["schema"]["required"] == ["a"]
@@ -101,6 +105,15 @@ def test_get_schemas_returns_defensive_copies() -> None:
 
     fresh_anthropic_schemas = registry.get_schemas("anthropic")
     assert fresh_anthropic_schemas[0]["input_schema"]["properties"]["a"]["type"] == "integer"
+
+    gemini_schemas = registry.get_schemas("gemini")
+    gemini_schemas[0]["functionDeclarations"][0]["parameters"]["properties"]["a"]["type"] = "string"
+
+    fresh_gemini_schemas = registry.get_schemas("gemini")
+    assert (
+        fresh_gemini_schemas[0]["functionDeclarations"][0]["parameters"]["properties"]["a"]["type"]
+        == "integer"
+    )
 
 
 def test_error_is_captured() -> None:

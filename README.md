@@ -98,7 +98,8 @@ tools = ToolRegistry()
 tools.register(search_web)
 
 # Get LLM-compatible schema
-schemas = tools.get_schemas("openai")  # or anthropic/gemini/json_schema
+schemas = tools.get_schemas("openai")  # or anthropic/json_schema
+gemini_tools = tools.get_schemas("gemini")  # [{"functionDeclarations": [...]}]
 ```
 
 **Output formats:**

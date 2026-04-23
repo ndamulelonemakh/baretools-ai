@@ -119,14 +119,18 @@ class ToolRegistry:
         if provider not in supported_providers:
             raise ValueError(f"Unsupported provider: {provider}")
 
+        if provider == "gemini":
+            declarations = [
+                _tool_to_gemini_function_declaration(tool) for tool in self._tools.values()
+            ]
+            return [{"functionDeclarations": declarations}]
+
         schemas: list[dict[str, Any]] = []
         for tool in self._tools.values():
             if provider == "openai":
                 schemas.append(_tool_to_openai_schema(tool))
             elif provider == "anthropic":
                 schemas.append(_tool_to_anthropic_schema(tool))
-            elif provider == "gemini":
-                schemas.append(_tool_to_gemini_schema(tool))
             else:
                 schemas.append(_tool_to_json_schema(tool))
         return schemas
@@ -464,7 +468,7 @@ def _tool_to_anthropic_schema(tool: RegisteredTool) -> dict[str, Any]:
     }
 
 
-def _tool_to_gemini_schema(tool: RegisteredTool) -> dict[str, Any]:
+def _tool_to_gemini_function_declaration(tool: RegisteredTool) -> dict[str, Any]:
     return {
         "name": tool.name,
         "description": tool.description,
