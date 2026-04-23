@@ -13,7 +13,13 @@ wheels = [
 
 [[package]]
 name = "baretools-ai"
+version = "0.3.0"
 source = { editable = "." }
+
+[package.optional-dependencies]
+pydantic = [
+    { name = "pydantic" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -22,8 +28,13 @@ dev = [
     { name = "python-semantic-release" },
     { name = "ruff" },
 ]
+pydantic = [
+    { name = "pydantic" },
+]
 
 [package.metadata]
+requires-dist = [{ name = "pydantic", marker = "extra == 'pydantic'", specifier = ">=2.0.0" }]
+provides-extras = ["pydantic"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -32,6 +43,7 @@ dev = [
     { name = "python-semantic-release", specifier = ">=9.8.0" },
     { name = "ruff", specifier = ">=0.5.0" },
 ]
+pydantic = [{ name = "pydantic", specifier = ">=2.0.0" }]
 
 [[package]]
 name = "certifi"

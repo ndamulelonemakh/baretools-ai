@@ -4,12 +4,22 @@ import asyncio
 import inspect
 import json
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from inspect import Signature, _empty, signature
 from time import perf_counter, sleep
-from typing import Any, Callable, Literal, Mapping, TypedDict, TypeVar
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Iterator,
+    Literal,
+    Mapping,
+    TypedDict,
+    TypeVar,
+    get_type_hints,
+)
 
 
 class ToolCall(TypedDict, total=False):
@@ -36,10 +46,25 @@ class ToolEvent(TypedDict, total=False):
     error: str
 
 
-class ToolMessage(TypedDict):
+class _OpenAIToolMessage(TypedDict):
     role: Literal["tool"]
     tool_call_id: str | None
     content: str
+
+
+class _AnthropicToolResult(TypedDict, total=False):
+    type: Literal["tool_result"]
+    tool_use_id: str | None
+    content: str
+    is_error: bool
+
+
+class _GeminiToolResult(TypedDict):
+    name: str | None
+    response: dict[str, Any]
+
+
+ProviderToolResult = _OpenAIToolMessage | _AnthropicToolResult | _GeminiToolResult
 
 
 JSON_SCHEMA_TYPE_MAP: dict[type, str] = {
@@ -62,6 +87,7 @@ class RegisteredTool:
     description: str
     function: Callable[..., Any]
     parameters: dict[str, Any]
+    coercions: dict[str, Callable[[Any], Any]] = field(default_factory=dict)
 
 
 def tool(
@@ -105,12 +131,19 @@ class ToolRegistry:
             raise ValueError(f"Tool '{tool_name}' already registered")
 
         sig = signature(fn)
-        parameters = _signature_to_json_schema(sig)
+        caller_locals: dict[str, Any] = {}
+        frame = inspect.currentframe()
+        if frame is not None and frame.f_back is not None:
+            caller_locals = dict(frame.f_back.f_locals)
+        hints = _resolve_type_hints(fn, caller_locals)
+        parameters = _signature_to_json_schema(sig, hints)
+        coercions = _extract_coercions(sig, hints)
         self._tools[tool_name] = RegisteredTool(
             name=tool_name,
             description=description,
             function=fn,
             parameters=parameters,
+            coercions=coercions,
         )
 
     def get_schemas(
@@ -217,6 +250,77 @@ class ToolRegistry:
             for call in tool_calls
         ]
 
+    def execute_stream(
+        self,
+        tool_calls: list[ToolCall] | list[Mapping[str, Any]],
+        *,
+        parallel: bool = False,
+        max_workers: int | None = None,
+        retries: int = 0,
+        retry_delay_seconds: float = 0.0,
+    ) -> Iterator[ToolResult]:
+        """Yield results as each call finishes; order is completion order when parallel."""
+        if parallel and len(tool_calls) > 1:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = [
+                    pool.submit(
+                        self._execute_with_retry_sync,
+                        call,
+                        retries=retries,
+                        retry_delay_seconds=retry_delay_seconds,
+                    )
+                    for call in tool_calls
+                ]
+                for future in as_completed(futures):
+                    yield future.result()
+            return
+
+        for call in tool_calls:
+            yield self._execute_with_retry_sync(
+                call,
+                retries=retries,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+
+    async def execute_stream_async(
+        self,
+        tool_calls: list[ToolCall] | list[Mapping[str, Any]],
+        *,
+        parallel: bool = False,
+        max_concurrency: int | None = None,
+        retries: int = 0,
+        retry_delay_seconds: float = 0.0,
+    ) -> AsyncIterator[ToolResult]:
+        """Async generator yielding ToolResult values as each call finishes."""
+        if parallel and len(tool_calls) > 1:
+            semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
+
+            async def _run(call: Mapping[str, Any]) -> ToolResult:
+                if semaphore is None:
+                    return await self._execute_with_retry_async(
+                        call,
+                        retries=retries,
+                        retry_delay_seconds=retry_delay_seconds,
+                    )
+                async with semaphore:
+                    return await self._execute_with_retry_async(
+                        call,
+                        retries=retries,
+                        retry_delay_seconds=retry_delay_seconds,
+                    )
+
+            tasks = [asyncio.create_task(_run(call)) for call in tool_calls]
+            for completed in asyncio.as_completed(tasks):
+                yield await completed
+            return
+
+        for call in tool_calls:
+            yield await self._execute_with_retry_async(
+                call,
+                retries=retries,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+
     def _execute_with_retry_sync(
         self,
         tool_call: Mapping[str, Any],
@@ -248,7 +352,8 @@ class ToolRegistry:
                     }
                 )
 
-                output = registered_tool.function(**arguments)
+                coerced = _apply_coercions(arguments, registered_tool.coercions)
+                output = registered_tool.function(**coerced)
                 if inspect.isawaitable(output):
                     output = _run_awaitable_in_sync(output)
 
@@ -296,7 +401,8 @@ class ToolRegistry:
                     }
                 )
 
-                output = registered_tool.function(**arguments)
+                coerced = _apply_coercions(arguments, registered_tool.coercions)
+                output = registered_tool.function(**coerced)
                 if inspect.isawaitable(output):
                     output = await output
 
@@ -346,16 +452,33 @@ class ToolRegistry:
             self._on_event(event)
 
 
-def parse_tool_calls(message: Any) -> list[ToolCall]:
-    """Parse OpenAI-style message.tool_calls into a normalized internal shape."""
+def parse_tool_calls(message: Any, provider: str = "openai") -> list[ToolCall]:
+    """Normalize provider-native tool calls to baretools ToolCall dicts.
 
-    # Support both object attributes (OpenAI v1 objects) and dict keys (JSON payloads)
+    Accepts either an SDK response object or its dict form. For ``gemini``,
+    pass the ``GenerateContentResponse``; for ``anthropic``, pass the
+    ``Message``; for ``openai``, pass ``response.choices[0].message``.
+    """
+
+    if provider not in _SUPPORTED_PROVIDERS or provider == "json_schema":
+        raise ValueError(
+            f"Unsupported provider: {provider}. Choose from openai, anthropic, gemini."
+        )
+
+    if provider == "openai":
+        return _parse_openai_tool_calls(message)
+    if provider == "anthropic":
+        return _parse_anthropic_tool_calls(message)
+    return _parse_gemini_tool_calls(message)
+
+
+def _parse_openai_tool_calls(message: Any) -> list[ToolCall]:
     if isinstance(message, dict):
         raw_calls = message.get("tool_calls", [])
     else:
         raw_calls = getattr(message, "tool_calls", None) or []
 
-    normalized = []
+    normalized: list[ToolCall] = []
     for call in raw_calls:
         if isinstance(call, dict):
             func_data = call.get("function", {})
@@ -365,13 +488,7 @@ def parse_tool_calls(message: Any) -> list[ToolCall]:
             else:
                 fn_name = getattr(func_data, "name", None)
                 fn_args = getattr(func_data, "arguments", "{}")
-            normalized.append(
-                {
-                    "id": call.get("id"),
-                    "name": fn_name,
-                    "arguments": fn_args,
-                }
-            )
+            normalized.append({"id": call.get("id"), "name": fn_name, "arguments": fn_args})
         else:
             func_data = getattr(call, "function", None)
             normalized.append(
@@ -384,19 +501,132 @@ def parse_tool_calls(message: Any) -> list[ToolCall]:
     return normalized
 
 
-def format_tool_results(results: list[ToolResult]) -> list[ToolMessage]:
-    """Format internal tool results for an OpenAI tool-role message append."""
-    formatted: list[ToolMessage] = []
-    for result in results:
-        content = result["output"] if result["error"] is None else f"ERROR: {result['error']}"
-        formatted.append(
-            {
-                "role": "tool",
-                "tool_call_id": result["tool_call_id"],
-                "content": str(content),
-            }
+def _parse_anthropic_tool_calls(message: Any) -> list[ToolCall]:
+    if isinstance(message, dict):
+        blocks = message.get("content", [])
+    else:
+        blocks = getattr(message, "content", None) or []
+
+    normalized: list[ToolCall] = []
+    for block in blocks:
+        if isinstance(block, dict):
+            block_type = block.get("type")
+            block_id = block.get("id")
+            block_name = block.get("name")
+            block_input = block.get("input", {})
+        else:
+            block_type = getattr(block, "type", None)
+            block_id = getattr(block, "id", None)
+            block_name = getattr(block, "name", None)
+            block_input = getattr(block, "input", {})
+
+        if block_type != "tool_use":
+            continue
+        normalized.append({"id": block_id, "name": block_name, "arguments": block_input or {}})
+    return normalized
+
+
+def _parse_gemini_tool_calls(message: Any) -> list[ToolCall]:
+    raw_calls: list[Any] = []
+    if isinstance(message, dict):
+        raw_calls = list(message.get("function_calls") or [])
+        if not raw_calls:
+            candidates = message.get("candidates") or []
+            if candidates:
+                content = candidates[0].get("content") or {}
+                for part in content.get("parts", []):
+                    fc = part.get("function_call") if isinstance(part, dict) else None
+                    if fc is not None:
+                        raw_calls.append(fc)
+    else:
+        function_calls = getattr(message, "function_calls", None)
+        if function_calls:
+            raw_calls = list(function_calls)
+        else:
+            candidates = getattr(message, "candidates", None) or []
+            if candidates:
+                parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
+                for part in parts:
+                    fc = getattr(part, "function_call", None)
+                    if fc is not None:
+                        raw_calls.append(fc)
+
+    normalized: list[ToolCall] = []
+    for call in raw_calls:
+        if isinstance(call, dict):
+            args = call.get("args") or {}
+            normalized.append(
+                {"id": call.get("id"), "name": call.get("name"), "arguments": dict(args)}
+            )
+        else:
+            args = getattr(call, "args", None) or {}
+            normalized.append(
+                {
+                    "id": getattr(call, "id", None),
+                    "name": getattr(call, "name", None),
+                    "arguments": dict(args),
+                }
+            )
+    return normalized
+
+
+def format_tool_results(
+    results: list[ToolResult],
+    provider: str = "openai",
+) -> list[ProviderToolResult]:
+    """Format tool results as provider-ready content/messages.
+
+    Returns ``list[ProviderToolResult]``; the concrete shape varies by provider:
+
+    - ``openai``: ``{role, tool_call_id, content}`` messages to extend the
+      conversation directly.
+    - ``anthropic``: ``tool_result`` content blocks to wrap in a single
+      ``{"role": "user", "content": [...]}`` message.
+    - ``gemini``: ``{name, response}`` dicts to wrap in
+      ``types.Part.from_function_response(**item)`` and a ``user`` ``Content``.
+    """
+
+    if provider not in _SUPPORTED_PROVIDERS or provider == "json_schema":
+        raise ValueError(
+            f"Unsupported provider: {provider}. Choose from openai, anthropic, gemini."
         )
-    return formatted
+
+    if provider == "openai":
+        formatted_openai: list[_OpenAIToolMessage] = []
+        for result in results:
+            content = result["output"] if result["error"] is None else f"ERROR: {result['error']}"
+            formatted_openai.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": result["tool_call_id"],
+                    "content": str(content),
+                }
+            )
+        return list(formatted_openai)
+
+    if provider == "anthropic":
+        formatted_anthropic: list[_AnthropicToolResult] = []
+        for result in results:
+            block: _AnthropicToolResult = {
+                "type": "tool_result",
+                "tool_use_id": result["tool_call_id"],
+            }
+            if result["error"] is None:
+                block["content"] = str(result["output"])
+            else:
+                block["content"] = f"ERROR: {result['error']}"
+                block["is_error"] = True
+            formatted_anthropic.append(block)
+        return list(formatted_anthropic)
+
+    formatted_gemini: list[_GeminiToolResult] = []
+    for result in results:
+        if result["error"] is None:
+            payload: dict[str, Any] = {"result": result["output"]}
+        else:
+            payload = {"error": result["error"]}
+        formatted_gemini.append({"name": result["tool_name"], "response": payload})
+    return list(formatted_gemini)
 
 
 def _normalize_call(tool_call: Mapping[str, Any]) -> tuple[str | None, str | None, dict[str, Any]]:
@@ -439,16 +669,27 @@ def _result(
     }
 
 
-def _signature_to_json_schema(sig: Signature) -> dict[str, Any]:
+def _signature_to_json_schema(
+    sig: Signature,
+    hints: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     properties: dict[str, Any] = {}
     required: list[str] = []
+    hints = hints or {}
 
     for param_name, param in sig.parameters.items():
         if param.kind not in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY):
             raise TypeError(f"Unsupported parameter kind for '{param_name}': {param.kind}")
 
-        json_type = _annotation_to_json_type(param.annotation)
-        properties[param_name] = {"type": json_type}
+        annotation = hints.get(param_name, param.annotation)
+        pydantic_schema = _pydantic_schema_for(annotation)
+        dataclass_schema = _dataclass_schema_for(annotation)
+        if pydantic_schema is not None:
+            properties[param_name] = pydantic_schema
+        elif dataclass_schema is not None:
+            properties[param_name] = dataclass_schema
+        else:
+            properties[param_name] = {"type": _annotation_to_json_type(annotation)}
 
         if param.default is _empty:
             required.append(param_name)
@@ -459,6 +700,109 @@ def _signature_to_json_schema(sig: Signature) -> dict[str, Any]:
         "required": required,
         "additionalProperties": False,
     }
+
+
+def _pydantic_base_model() -> type | None:
+    try:
+        from pydantic import BaseModel
+    except ImportError:
+        return None
+    return BaseModel
+
+
+def _resolve_type_hints(
+    fn: Callable[..., Any],
+    extra_locals: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    localns: dict[str, Any] = {}
+    if extra_locals:
+        localns.update(extra_locals)
+    try:
+        closure = inspect.getclosurevars(fn)
+        localns.update(closure.nonlocals)
+        localns.update(closure.globals)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return get_type_hints(fn, localns=localns)
+    except Exception:
+        return {}
+
+
+def _is_pydantic_model(annotation: Any) -> bool:
+    base = _pydantic_base_model()
+    if base is None:
+        return False
+    return isinstance(annotation, type) and issubclass(annotation, base)
+
+
+def _pydantic_schema_for(annotation: Any) -> dict[str, Any] | None:
+    if not _is_pydantic_model(annotation):
+        return None
+    schema = annotation.model_json_schema()
+    schema.pop("title", None)
+    return schema
+
+
+def _dataclass_schema_for(annotation: Any) -> dict[str, Any] | None:
+    import dataclasses
+
+    if not dataclasses.is_dataclass(annotation):
+        return None
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for f in dataclasses.fields(annotation):
+        properties[f.name] = {"type": _annotation_to_json_type(f.type)}
+        if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING:
+            required.append(f.name)
+
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+def _extract_coercions(
+    sig: Signature,
+    hints: dict[str, Any] | None = None,
+) -> dict[str, Callable[[Any], Any]]:
+    coercions: dict[str, Callable[[Any], Any]] = {}
+    hints = hints or {}
+    for param_name, param in sig.parameters.items():
+        annotation = hints.get(param_name, param.annotation)
+        if _is_pydantic_model(annotation):
+            model = annotation
+            coercions[param_name] = lambda value, m=model: (
+                value if isinstance(value, m) else m.model_validate(value)
+            )
+            continue
+
+        import dataclasses
+
+        if dataclasses.is_dataclass(annotation):
+            model = annotation
+            coercions[param_name] = lambda value, m=model: (
+                value if isinstance(value, m) else m(**value)
+            )
+
+    return coercions
+
+
+def _apply_coercions(
+    arguments: dict[str, Any],
+    coercions: dict[str, Callable[[Any], Any]],
+) -> dict[str, Any]:
+    if not coercions:
+        return arguments
+    coerced = dict(arguments)
+    for name, coerce in coercions.items():
+        if name in coerced:
+            coerced[name] = coerce(coerced[name])
+    return coerced
 
 
 def _tool_to_openai_schema(tool: RegisteredTool, *, strict: bool = False) -> dict[str, Any]:
