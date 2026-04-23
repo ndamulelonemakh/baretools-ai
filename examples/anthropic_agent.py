@@ -8,12 +8,11 @@ Optional: ANTHROPIC_MODEL=claude-sonnet-4-5
 
 from __future__ import annotations
 
-import json
 import os
 from contextlib import nullcontext
 from typing import Any, Callable, Literal
 
-from baretools import ToolRegistry, tool
+from baretools import ToolRegistry, format_tool_results, parse_tool_calls, tool
 
 TraceDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
 
@@ -104,34 +103,6 @@ def _assistant_content_blocks(message: Any) -> list[dict[str, Any]]:
     return message.model_dump(exclude_none=True)["content"]
 
 
-def _tool_calls_from_response(message: Any) -> list[dict[str, Any]]:
-    calls = []
-    for block in message.content:
-        if block.type == "tool_use":
-            calls.append({"id": block.id, "name": block.name, "arguments": block.input})
-    return calls
-
-
-def _tool_results_message(results: list[dict[str, Any]]) -> dict[str, Any]:
-    content = []
-    for result in results:
-        value: Any = result["output"]
-        if result["error"] is not None:
-            value = {"error": result["error"]}
-        if isinstance(value, (dict, list)):
-            value = json.dumps(value)
-
-        block: dict[str, Any] = {
-            "type": "tool_result",
-            "tool_use_id": result["tool_call_id"],
-            "content": str(value),
-        }
-        if result["error"] is not None:
-            block["is_error"] = True
-        content.append(block)
-    return {"role": "user", "content": content}
-
-
 def _final_text(message: Any) -> str:
     return "\n".join(block.text for block in message.content if block.type == "text").strip()
 
@@ -154,7 +125,7 @@ def run_agent() -> str:
                 messages=messages,
                 tools=registry.get_schemas("anthropic"),
             )
-            tool_calls = _tool_calls_from_response(response)
+            tool_calls = parse_tool_calls(response, "anthropic")
             if not tool_calls:
                 return _final_text(response)
 
@@ -163,7 +134,9 @@ def run_agent() -> str:
             messages.append({"role": "assistant", "content": _assistant_content_blocks(response)})
             for result in results:
                 print("tool result", result["tool_name"], result["output"])
-            messages.append(_tool_results_message(results))
+            messages.append(
+                {"role": "user", "content": format_tool_results(results, "anthropic")}
+            )
 
     raise RuntimeError("Agent loop exceeded max iterations")
 

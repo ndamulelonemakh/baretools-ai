@@ -8,12 +8,11 @@ Optional: OPENAI_MODEL=gpt-4.1
 
 from __future__ import annotations
 
-import json
 import os
 from contextlib import nullcontext
 from typing import Any, Callable, Literal
 
-from baretools import ToolRegistry, parse_tool_calls, tool
+from baretools import ToolRegistry, format_tool_results, parse_tool_calls, tool
 
 TraceDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
 
@@ -100,12 +99,6 @@ def build_registry() -> ToolRegistry:
     return registry
 
 
-def _content_for_model(value: Any) -> str:
-    if isinstance(value, (dict, list)):
-        return json.dumps(value)
-    return str(value)
-
-
 @TRACE_OP()
 def run_agent() -> str:
     from openai import OpenAI
@@ -126,7 +119,7 @@ def run_agent() -> str:
                 tools=registry.get_schemas("openai", strict=True),
             )
             message = response.choices[0].message
-            tool_calls = parse_tool_calls(message)
+            tool_calls = parse_tool_calls(message, "openai")
             if not tool_calls:
                 return message.content or ""
 
@@ -135,16 +128,7 @@ def run_agent() -> str:
             messages.append(message.model_dump(exclude_none=True))
             for result in results:
                 print("tool result", result["tool_name"], result["output"])
-                content = result["output"]
-                if result["error"] is not None:
-                    content = {"error": result["error"]}
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": result["tool_call_id"],
-                        "content": _content_for_model(content),
-                    }
-                )
+            messages.extend(format_tool_results(results, "openai"))
 
     raise RuntimeError("Agent loop exceeded max iterations")
 

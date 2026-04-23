@@ -12,7 +12,7 @@ import os
 from contextlib import nullcontext
 from typing import Any, Callable, Literal
 
-from baretools import ToolRegistry, tool
+from baretools import ToolRegistry, format_tool_results, parse_tool_calls, tool
 
 TraceDecorator = Callable[[Callable[..., Any]], Callable[..., Any]]
 
@@ -99,18 +99,6 @@ def build_registry() -> ToolRegistry:
     return registry
 
 
-def _function_calls(response: Any) -> list[Any]:
-    if getattr(response, "function_calls", None):
-        return list(response.function_calls)
-
-    calls = []
-    for part in response.candidates[0].content.parts:
-        function_call = getattr(part, "function_call", None)
-        if function_call is not None:
-            calls.append(function_call)
-    return calls
-
-
 @TRACE_OP()
 def run_agent() -> str:
     from google import genai
@@ -133,30 +121,20 @@ def run_agent() -> str:
                 contents=contents,
                 config=config,
             )
-            function_calls = _function_calls(response)
-            if not function_calls:
+            tool_calls = parse_tool_calls(response, "gemini")
+            if not tool_calls:
                 return response.text or ""
 
-            tool_calls = [
-                {"id": call.id, "name": call.name, "arguments": dict(call.args)}
-                for call in function_calls
-            ]
             print("assistant requested", [call["name"] for call in tool_calls])
             results = registry.execute(tool_calls, parallel=True)
             contents.append(response.candidates[0].content)
 
-            parts = []
             for result in results:
                 print("tool result", result["tool_name"], result["output"])
-                payload = {"result": result["output"]}
-                if result["error"] is not None:
-                    payload = {"error": result["error"]}
-                parts.append(
-                    types.Part.from_function_response(
-                        name=result["tool_name"],
-                        response=payload,
-                    )
-                )
+            parts = [
+                types.Part.from_function_response(**item)
+                for item in format_tool_results(results, "gemini")
+            ]
             contents.append(types.Content(role="user", parts=parts))
 
     raise RuntimeError("Agent loop exceeded max iterations")

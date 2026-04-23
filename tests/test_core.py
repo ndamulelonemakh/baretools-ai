@@ -5,7 +5,7 @@ from time import perf_counter, sleep
 
 import pytest
 
-from baretools import ToolRegistry, format_tool_results, tool
+from baretools import ToolRegistry, format_tool_results, parse_tool_calls, tool
 
 
 def test_schema_generation_and_execution() -> None:
@@ -225,6 +225,99 @@ def test_format_tool_results() -> None:
 
     assert formatted[0]["role"] == "tool"
     assert formatted[1]["content"] == "ERROR: bad"
+
+
+def test_parse_tool_calls_openai_dict() -> None:
+    message = {
+        "tool_calls": [
+            {"id": "c1", "function": {"name": "f", "arguments": '{"x": 1}'}},
+        ]
+    }
+    calls = parse_tool_calls(message, "openai")
+    assert calls == [{"id": "c1", "name": "f", "arguments": '{"x": 1}'}]
+
+
+def test_parse_tool_calls_anthropic() -> None:
+    class Block:
+        def __init__(self, **kw: object) -> None:
+            self.__dict__.update(kw)
+
+    class Msg:
+        content = [
+            Block(type="text", text="thinking"),
+            Block(type="tool_use", id="tu_1", name="f", input={"x": 1}),
+        ]
+
+    calls = parse_tool_calls(Msg(), "anthropic")
+    assert calls == [{"id": "tu_1", "name": "f", "arguments": {"x": 1}}]
+
+
+def test_parse_tool_calls_gemini_function_calls_attr() -> None:
+    class Call:
+        id = "g_1"
+        name = "f"
+        args = {"x": 1}
+
+    class Resp:
+        function_calls = [Call()]
+
+    calls = parse_tool_calls(Resp(), "gemini")
+    assert calls == [{"id": "g_1", "name": "f", "arguments": {"x": 1}}]
+
+
+def test_parse_tool_calls_gemini_parts_fallback() -> None:
+    class FC:
+        id = None
+        name = "f"
+        args = {"x": 1}
+
+    class Part:
+        function_call = FC()
+
+    class Content:
+        parts = [Part()]
+
+    class Candidate:
+        content = Content()
+
+    class Resp:
+        function_calls = None
+        candidates = [Candidate()]
+
+    calls = parse_tool_calls(Resp(), "gemini")
+    assert calls == [{"id": None, "name": "f", "arguments": {"x": 1}}]
+
+
+def test_parse_tool_calls_unknown_provider() -> None:
+    with pytest.raises(ValueError):
+        parse_tool_calls({}, "cohere")
+
+
+def test_format_tool_results_anthropic() -> None:
+    formatted = format_tool_results(
+        [
+            {"tool_call_id": "tu_1", "tool_name": "f", "output": {"v": 1}, "error": None},
+            {"tool_call_id": "tu_2", "tool_name": "g", "output": None, "error": "boom"},
+        ],
+        "anthropic",
+    )
+    assert formatted[0] == {"type": "tool_result", "tool_use_id": "tu_1", "content": "{'v': 1}"}
+    assert formatted[1]["is_error"] is True
+    assert formatted[1]["content"] == "ERROR: boom"
+
+
+def test_format_tool_results_gemini() -> None:
+    formatted = format_tool_results(
+        [
+            {"tool_call_id": "g1", "tool_name": "f", "output": {"v": 1}, "error": None},
+            {"tool_call_id": "g2", "tool_name": "g", "output": None, "error": "boom"},
+        ],
+        "gemini",
+    )
+    assert formatted == [
+        {"name": "f", "response": {"result": {"v": 1}}},
+        {"name": "g", "response": {"error": "boom"}},
+    ]
 
 
 def test_parallel_execution_is_faster_than_sequential() -> None:

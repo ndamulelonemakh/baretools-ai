@@ -437,16 +437,33 @@ class ToolRegistry:
             self._on_event(event)
 
 
-def parse_tool_calls(message: Any) -> list[ToolCall]:
-    """Parse OpenAI-style message.tool_calls into a normalized internal shape."""
+def parse_tool_calls(message: Any, provider: str = "openai") -> list[ToolCall]:
+    """Normalize provider-native tool calls to baretools ToolCall dicts.
 
-    # Support both object attributes (OpenAI v1 objects) and dict keys (JSON payloads)
+    Accepts either an SDK response object or its dict form. For ``gemini``,
+    pass the ``GenerateContentResponse``; for ``anthropic``, pass the
+    ``Message``; for ``openai``, pass ``response.choices[0].message``.
+    """
+
+    if provider not in _SUPPORTED_PROVIDERS or provider == "json_schema":
+        raise ValueError(
+            f"Unsupported provider: {provider}. Choose from openai, anthropic, gemini."
+        )
+
+    if provider == "openai":
+        return _parse_openai_tool_calls(message)
+    if provider == "anthropic":
+        return _parse_anthropic_tool_calls(message)
+    return _parse_gemini_tool_calls(message)
+
+
+def _parse_openai_tool_calls(message: Any) -> list[ToolCall]:
     if isinstance(message, dict):
         raw_calls = message.get("tool_calls", [])
     else:
         raw_calls = getattr(message, "tool_calls", None) or []
 
-    normalized = []
+    normalized: list[ToolCall] = []
     for call in raw_calls:
         if isinstance(call, dict):
             func_data = call.get("function", {})
@@ -456,13 +473,7 @@ def parse_tool_calls(message: Any) -> list[ToolCall]:
             else:
                 fn_name = getattr(func_data, "name", None)
                 fn_args = getattr(func_data, "arguments", "{}")
-            normalized.append(
-                {
-                    "id": call.get("id"),
-                    "name": fn_name,
-                    "arguments": fn_args,
-                }
-            )
+            normalized.append({"id": call.get("id"), "name": fn_name, "arguments": fn_args})
         else:
             func_data = getattr(call, "function", None)
             normalized.append(
@@ -475,19 +486,130 @@ def parse_tool_calls(message: Any) -> list[ToolCall]:
     return normalized
 
 
-def format_tool_results(results: list[ToolResult]) -> list[ToolMessage]:
-    """Format internal tool results for an OpenAI tool-role message append."""
-    formatted: list[ToolMessage] = []
-    for result in results:
-        content = result["output"] if result["error"] is None else f"ERROR: {result['error']}"
-        formatted.append(
-            {
-                "role": "tool",
-                "tool_call_id": result["tool_call_id"],
-                "content": str(content),
-            }
+def _parse_anthropic_tool_calls(message: Any) -> list[ToolCall]:
+    if isinstance(message, dict):
+        blocks = message.get("content", [])
+    else:
+        blocks = getattr(message, "content", None) or []
+
+    normalized: list[ToolCall] = []
+    for block in blocks:
+        if isinstance(block, dict):
+            block_type = block.get("type")
+            block_id = block.get("id")
+            block_name = block.get("name")
+            block_input = block.get("input", {})
+        else:
+            block_type = getattr(block, "type", None)
+            block_id = getattr(block, "id", None)
+            block_name = getattr(block, "name", None)
+            block_input = getattr(block, "input", {})
+
+        if block_type != "tool_use":
+            continue
+        normalized.append({"id": block_id, "name": block_name, "arguments": block_input or {}})
+    return normalized
+
+
+def _parse_gemini_tool_calls(message: Any) -> list[ToolCall]:
+    raw_calls: list[Any] = []
+    if isinstance(message, dict):
+        raw_calls = list(message.get("function_calls") or [])
+        if not raw_calls:
+            candidates = message.get("candidates") or []
+            if candidates:
+                content = candidates[0].get("content") or {}
+                for part in content.get("parts", []):
+                    fc = part.get("function_call") if isinstance(part, dict) else None
+                    if fc is not None:
+                        raw_calls.append(fc)
+    else:
+        function_calls = getattr(message, "function_calls", None)
+        if function_calls:
+            raw_calls = list(function_calls)
+        else:
+            candidates = getattr(message, "candidates", None) or []
+            if candidates:
+                parts = getattr(getattr(candidates[0], "content", None), "parts", None) or []
+                for part in parts:
+                    fc = getattr(part, "function_call", None)
+                    if fc is not None:
+                        raw_calls.append(fc)
+
+    normalized: list[ToolCall] = []
+    for call in raw_calls:
+        if isinstance(call, dict):
+            args = call.get("args") or {}
+            normalized.append(
+                {"id": call.get("id"), "name": call.get("name"), "arguments": dict(args)}
+            )
+        else:
+            args = getattr(call, "args", None) or {}
+            normalized.append(
+                {
+                    "id": getattr(call, "id", None),
+                    "name": getattr(call, "name", None),
+                    "arguments": dict(args),
+                }
+            )
+    return normalized
+
+
+def format_tool_results(
+    results: list[ToolResult],
+    provider: str = "openai",
+) -> list[dict[str, Any]]:
+    """Format tool results as provider-ready content/messages.
+
+    - ``openai``: list of ``{role: "tool", tool_call_id, content}`` messages
+      to extend the conversation directly.
+    - ``anthropic``: list of ``tool_result`` content blocks to wrap in a
+      single ``{"role": "user", "content": [...]}`` message.
+    - ``gemini``: list of ``{name, response}`` dicts to wrap in
+      ``types.Part.from_function_response(**item)`` and a ``user`` ``Content``.
+    """
+
+    if provider not in _SUPPORTED_PROVIDERS or provider == "json_schema":
+        raise ValueError(
+            f"Unsupported provider: {provider}. Choose from openai, anthropic, gemini."
         )
-    return formatted
+
+    if provider == "openai":
+        formatted_openai: list[dict[str, Any]] = []
+        for result in results:
+            content = result["output"] if result["error"] is None else f"ERROR: {result['error']}"
+            formatted_openai.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": result["tool_call_id"],
+                    "content": str(content),
+                }
+            )
+        return formatted_openai
+
+    if provider == "anthropic":
+        formatted_anthropic: list[dict[str, Any]] = []
+        for result in results:
+            block: dict[str, Any] = {
+                "type": "tool_result",
+                "tool_use_id": result["tool_call_id"],
+            }
+            if result["error"] is None:
+                block["content"] = str(result["output"])
+            else:
+                block["content"] = f"ERROR: {result['error']}"
+                block["is_error"] = True
+            formatted_anthropic.append(block)
+        return formatted_anthropic
+
+    formatted_gemini: list[dict[str, Any]] = []
+    for result in results:
+        if result["error"] is None:
+            payload: dict[str, Any] = {"result": result["output"]}
+        else:
+            payload = {"error": result["error"]}
+        formatted_gemini.append({"name": result["tool_name"], "response": payload})
+    return formatted_gemini
 
 
 def _normalize_call(tool_call: Mapping[str, Any]) -> tuple[str | None, str | None, dict[str, Any]]:
