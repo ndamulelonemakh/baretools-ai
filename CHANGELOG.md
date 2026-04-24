@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.4.2 (2026-04-24)
+
+### Bug Fixes
+
+- **ci**: Bump pinned action versions to latest releases
+  ([`e1237a6`](https://github.com/ndamulelonemakh/baretools-ai/commit/e1237a6afc4e10840c7b0670bd4cc6f2c55ca0c0))
+
+### Chores
+
+- **lock**: Sync uv.lock to 0.4.1
+  ([`38cb66d`](https://github.com/ndamulelonemakh/baretools-ai/commit/38cb66ddd185e8a6d53bd1d0451af54e084e7b09))
+
+### Documentation
+
+- **readme**: Update description to emphasize focus on AI Engineers
+  ([`b8fe09a`](https://github.com/ndamulelonemakh/baretools-ai/commit/b8fe09a12ff665f2bb6fe1c0be034b41e69e2c68))
+
+- **readme**: Use shields.io workflow badge for reliable pypi rendering
+  ([`2500d26`](https://github.com/ndamulelonemakh/baretools-ai/commit/2500d261c0ec08b9519dba700e3c39e9da50651b))
+
+
 ## v0.4.1 (2026-04-24)
 
 ### Bug Fixes
