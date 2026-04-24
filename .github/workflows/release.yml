@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: true
@@ -70,7 +70,7 @@ jobs:
       - name: Generate release notes with GitHub Models
         if: steps.next.outputs.should_release == 'true'
         id: ai_notes
-        uses: actions/ai-inference@v1
+        uses: actions/ai-inference@v2.0.7
         with:
           model: openai/gpt-4o-mini
           system-prompt: |
