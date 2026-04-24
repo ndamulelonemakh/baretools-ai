@@ -5,6 +5,7 @@ import inspect
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from copy import deepcopy
 from dataclasses import dataclass, field
 from inspect import Signature, _empty, signature
@@ -197,9 +198,17 @@ class ToolRegistry:
         max_workers: int | None = None,
         retries: int = 0,
         retry_delay_seconds: float = 0.0,
+        timeout: float | None = None,
     ) -> list[ToolResult]:
-        """Sync execution API; supports both sync and async tool functions."""
+        """Sync execution API; supports both sync and async tool functions.
+
+        ``timeout`` is a per-attempt wall-clock cap in seconds. When set, each
+        tool invocation runs in a worker thread; if it does not complete in
+        time, the result is recorded as a ``TimeoutError`` and the next retry
+        (if any) is attempted. The underlying thread is not killed.
+        """
         self._validate_tool_calls(tool_calls)
+        _validate_timeout(timeout)
 
         if parallel and len(tool_calls) > 1:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -209,6 +218,7 @@ class ToolRegistry:
                             call,
                             retries=retries,
                             retry_delay_seconds=retry_delay_seconds,
+                            timeout=timeout,
                         ),
                         tool_calls,
                     )
@@ -219,6 +229,7 @@ class ToolRegistry:
                 call,
                 retries=retries,
                 retry_delay_seconds=retry_delay_seconds,
+                timeout=timeout,
             )
             for call in tool_calls
         ]
@@ -231,9 +242,16 @@ class ToolRegistry:
         max_concurrency: int | None = None,
         retries: int = 0,
         retry_delay_seconds: float = 0.0,
+        timeout: float | None = None,
     ) -> list[ToolResult]:
-        """Async execution API; use this from existing async agent loops."""
+        """Async execution API; use this from existing async agent loops.
+
+        ``timeout`` applies per attempt via ``asyncio.wait_for``; on expiry the
+        result is recorded as a ``TimeoutError``. A cancelled async tool may
+        not stop immediately if it does not yield to the event loop.
+        """
         self._validate_tool_calls(tool_calls)
+        _validate_timeout(timeout)
 
         if parallel and len(tool_calls) > 1:
             semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
@@ -244,12 +262,14 @@ class ToolRegistry:
                         call,
                         retries=retries,
                         retry_delay_seconds=retry_delay_seconds,
+                        timeout=timeout,
                     )
                 async with semaphore:
                     return await self._execute_with_retry_async(
                         call,
                         retries=retries,
                         retry_delay_seconds=retry_delay_seconds,
+                        timeout=timeout,
                     )
 
             return list(await asyncio.gather(*(_run(call) for call in tool_calls)))
@@ -259,6 +279,7 @@ class ToolRegistry:
                 call,
                 retries=retries,
                 retry_delay_seconds=retry_delay_seconds,
+                timeout=timeout,
             )
             for call in tool_calls
         ]
@@ -271,9 +292,11 @@ class ToolRegistry:
         max_workers: int | None = None,
         retries: int = 0,
         retry_delay_seconds: float = 0.0,
+        timeout: float | None = None,
     ) -> Iterator[ToolResult]:
         """Yield results as each call finishes; order is completion order when parallel."""
         self._validate_tool_calls(tool_calls)
+        _validate_timeout(timeout)
 
         if parallel and len(tool_calls) > 1:
             with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -283,6 +306,7 @@ class ToolRegistry:
                         call,
                         retries=retries,
                         retry_delay_seconds=retry_delay_seconds,
+                        timeout=timeout,
                     )
                     for call in tool_calls
                 ]
@@ -295,6 +319,7 @@ class ToolRegistry:
                 call,
                 retries=retries,
                 retry_delay_seconds=retry_delay_seconds,
+                timeout=timeout,
             )
 
     async def execute_stream_async(
@@ -305,9 +330,11 @@ class ToolRegistry:
         max_concurrency: int | None = None,
         retries: int = 0,
         retry_delay_seconds: float = 0.0,
+        timeout: float | None = None,
     ) -> AsyncIterator[ToolResult]:
         """Async generator yielding ToolResult values as each call finishes."""
         self._validate_tool_calls(tool_calls)
+        _validate_timeout(timeout)
 
         if parallel and len(tool_calls) > 1:
             semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency else None
@@ -318,12 +345,14 @@ class ToolRegistry:
                         call,
                         retries=retries,
                         retry_delay_seconds=retry_delay_seconds,
+                        timeout=timeout,
                     )
                 async with semaphore:
                     return await self._execute_with_retry_async(
                         call,
                         retries=retries,
                         retry_delay_seconds=retry_delay_seconds,
+                        timeout=timeout,
                     )
 
             tasks = [asyncio.create_task(_run(call)) for call in tool_calls]
@@ -336,6 +365,7 @@ class ToolRegistry:
                 call,
                 retries=retries,
                 retry_delay_seconds=retry_delay_seconds,
+                timeout=timeout,
             )
 
     def _execute_with_retry_sync(
@@ -344,6 +374,7 @@ class ToolRegistry:
         *,
         retries: int,
         retry_delay_seconds: float,
+        timeout: float | None = None,
     ) -> ToolResult:
         if retries < 0:
             raise ValueError("retries must be >= 0")
@@ -376,7 +407,7 @@ class ToolRegistry:
                 )
 
                 coerced = _apply_coercions(arguments, registered_tool.coercions)
-                output = registered_tool.function(**coerced)
+                output = _call_with_timeout_sync(registered_tool.function, coerced, timeout, name)
                 if inspect.isawaitable(output):
                     output = _run_awaitable_in_sync(output)
 
@@ -399,6 +430,7 @@ class ToolRegistry:
         *,
         retries: int,
         retry_delay_seconds: float,
+        timeout: float | None = None,
     ) -> ToolResult:
         if retries < 0:
             raise ValueError("retries must be >= 0")
@@ -433,7 +465,15 @@ class ToolRegistry:
                 coerced = _apply_coercions(arguments, registered_tool.coercions)
                 output = registered_tool.function(**coerced)
                 if inspect.isawaitable(output):
-                    output = await output
+                    if timeout is not None:
+                        try:
+                            output = await asyncio.wait_for(output, timeout=timeout)
+                        except asyncio.TimeoutError as exc:
+                            raise TimeoutError(
+                                f"Tool '{name}' exceeded timeout of {timeout}s"
+                            ) from exc
+                    else:
+                        output = await output
 
                 self._logger.debug(
                     "tool call succeeded",
@@ -510,12 +550,28 @@ class ToolRegistry:
                 )
 
 
-def parse_tool_calls(message: Any, provider: str = "openai") -> list[ToolCall]:
+def parse_tool_calls(
+    message: Any,
+    provider: str = "openai",
+    *,
+    strict: bool = False,
+) -> list[ToolCall]:
     """Normalize provider-native tool calls to baretools ToolCall dicts.
 
     Accepts either an SDK response object or its dict form. For ``gemini``,
     pass the ``GenerateContentResponse``; for ``anthropic``, pass the
-    ``Message``; for ``openai``, pass ``response.choices[0].message``.
+    ``Message``; for ``openai``, pass ``response.choices[0].message`` (Chat
+    Completions) or a ``function_call`` item from ``response.output``
+    (Responses API).
+
+    OpenAI delivers tool-call arguments as a JSON-encoded string (see
+    https://developers.openai.com/api/docs/guides/function-calling) which can
+    occasionally be malformed, especially without ``strict: true``. When
+    ``strict=True``, that string is validated immediately and a ``ValueError``
+    is raised instead of deferring the failure to ``ToolRegistry.execute``.
+
+    Has no effect for ``anthropic`` (``tool_use.input``) or ``gemini``
+    (``function_call.args``), which both deliver arguments as native dicts.
     """
 
     if provider not in _SUPPORTED_PROVIDERS or provider == "json_schema":
@@ -524,13 +580,13 @@ def parse_tool_calls(message: Any, provider: str = "openai") -> list[ToolCall]:
         )
 
     if provider == "openai":
-        return _parse_openai_tool_calls(message)
+        return _parse_openai_tool_calls(message, strict=strict)
     if provider == "anthropic":
         return _parse_anthropic_tool_calls(message)
     return _parse_gemini_tool_calls(message)
 
 
-def _parse_openai_tool_calls(message: Any) -> list[ToolCall]:
+def _parse_openai_tool_calls(message: Any, *, strict: bool = False) -> list[ToolCall]:
     if isinstance(message, dict):
         raw_calls = message.get("tool_calls", [])
     else:
@@ -546,16 +602,23 @@ def _parse_openai_tool_calls(message: Any) -> list[ToolCall]:
             else:
                 fn_name = getattr(func_data, "name", None)
                 fn_args = getattr(func_data, "arguments", "{}")
-            normalized.append({"id": call.get("id"), "name": fn_name, "arguments": fn_args})
+            call_id = call.get("id")
         else:
             func_data = getattr(call, "function", None)
-            normalized.append(
-                {
-                    "id": getattr(call, "id", None),
-                    "name": getattr(func_data, "name", None) if func_data else None,
-                    "arguments": getattr(func_data, "arguments", "{}") if func_data else "{}",
-                }
-            )
+            fn_name = getattr(func_data, "name", None) if func_data else None
+            fn_args = getattr(func_data, "arguments", "{}") if func_data else "{}"
+            call_id = getattr(call, "id", None)
+
+        if strict and isinstance(fn_args, str):
+            try:
+                json.loads(fn_args or "{}")
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Malformed JSON arguments for tool '{fn_name}' "
+                    f"(call id={call_id!r}): {exc.msg}"
+                ) from exc
+
+        normalized.append({"id": call_id, "name": fn_name, "arguments": fn_args})
     return normalized
 
 
@@ -707,6 +770,32 @@ def _run_awaitable_in_sync(awaitable: Any) -> Any:
         "Cannot execute async tool in sync execute() while an event loop is already running. "
         "Use await execute_async(...) instead."
     )
+
+
+def _validate_timeout(timeout: float | None) -> None:
+    if timeout is None:
+        return
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+        raise TypeError("timeout must be a number of seconds or None")
+    if timeout <= 0:
+        raise ValueError("timeout must be > 0")
+
+
+def _call_with_timeout_sync(
+    fn: Callable[..., Any],
+    kwargs: dict[str, Any],
+    timeout: float | None,
+    tool_name: str | None,
+) -> Any:
+    if timeout is None:
+        return fn(**kwargs)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(fn, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            raise TimeoutError(f"Tool '{tool_name}' exceeded timeout of {timeout}s") from exc
 
 
 def _result(

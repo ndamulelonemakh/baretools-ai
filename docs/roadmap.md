@@ -26,6 +26,10 @@ Tracks shipped milestones and the loosely-planned next steps. Concrete in-progre
 - Streaming results (`execute_stream`, `execute_stream_async`)
 - Runnable provider examples in [`examples/`](https://github.com/ndamulelonemakh/baretools-ai/tree/main/examples)
 
+### v0.4.0 — Reliability
+- Per-attempt `timeout` on all four execute methods (sync, async, streaming)
+- `parse_tool_calls(..., strict=True)` to fail fast on malformed OpenAI argument JSON
+
 ## Considering
 
 - **Tool composition** — tools calling tools, programmatic tool search and dispatch

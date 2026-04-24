@@ -770,3 +770,313 @@ def test_execute_stream_rejects_batches_larger_than_configured_limit() -> None:
 
     with pytest.raises(ValueError, match="Too many tool calls"):
         list(registry.execute_stream(calls))
+
+
+def test_execute_sync_timeout_returns_error_result() -> None:
+    @tool
+    def slow() -> str:
+        sleep(0.5)
+        return "done"
+
+    registry = ToolRegistry()
+    registry.register(slow)
+
+    [result] = registry.execute(
+        [{"id": "t1", "name": "slow", "arguments": {}}],
+        timeout=0.05,
+    )
+    assert result["error"] is not None
+    assert "timeout" in result["error"].lower()
+    assert result["output"] is None
+
+
+def test_execute_sync_timeout_allows_retry_to_succeed() -> None:
+    attempts: list[float] = []
+
+    @tool
+    def flaky() -> str:
+        attempts.append(perf_counter())
+        if len(attempts) == 1:
+            sleep(0.5)
+        return "ok"
+
+    registry = ToolRegistry()
+    registry.register(flaky)
+
+    [result] = registry.execute(
+        [{"id": "t1", "name": "flaky", "arguments": {}}],
+        timeout=0.05,
+        retries=1,
+    )
+    assert result["error"] is None
+    assert result["output"] == "ok"
+    assert result["attempts"] == 2
+
+
+def test_execute_async_timeout_returns_error_result() -> None:
+    @tool
+    async def slow_async() -> str:
+        await asyncio.sleep(0.5)
+        return "done"
+
+    registry = ToolRegistry()
+    registry.register(slow_async)
+
+    async def run() -> list:
+        return await registry.execute_async(
+            [{"id": "t1", "name": "slow_async", "arguments": {}}],
+            timeout=0.05,
+        )
+
+    [result] = asyncio.run(run())
+    assert result["error"] is not None
+    assert "timeout" in result["error"].lower()
+
+
+def test_execute_rejects_invalid_timeout() -> None:
+    @tool
+    def noop() -> int:
+        return 1
+
+    registry = ToolRegistry()
+    registry.register(noop)
+    call = [{"id": "t1", "name": "noop", "arguments": {}}]
+
+    with pytest.raises(ValueError, match="timeout must be > 0"):
+        registry.execute(call, timeout=0)
+    with pytest.raises(TypeError, match="timeout must be a number"):
+        registry.execute(call, timeout="1")  # type: ignore[arg-type]
+
+
+def test_parse_tool_calls_strict_raises_on_malformed_openai_arguments() -> None:
+    message = {
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "function": {"name": "do_thing", "arguments": "{not-json"},
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="Malformed JSON arguments"):
+        parse_tool_calls(message, "openai", strict=True)
+
+
+def test_parse_tool_calls_strict_passes_valid_openai_arguments() -> None:
+    message = {
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "function": {"name": "do_thing", "arguments": '{"x": 1}'},
+            }
+        ]
+    }
+
+    [call] = parse_tool_calls(message, "openai", strict=True)
+    assert call["name"] == "do_thing"
+    assert call["arguments"] == '{"x": 1}'
+
+
+def test_parse_tool_calls_strict_is_noop_for_anthropic_and_gemini() -> None:
+    anthropic_msg = {
+        "content": [{"type": "tool_use", "id": "tu_1", "name": "do_thing", "input": {"x": 1}}]
+    }
+    [a_call] = parse_tool_calls(anthropic_msg, "anthropic", strict=True)
+    assert a_call["arguments"] == {"x": 1}
+
+    gemini_msg = {"function_calls": [{"id": "g1", "name": "do_thing", "args": {"x": 1}}]}
+    [g_call] = parse_tool_calls(gemini_msg, "gemini", strict=True)
+    assert g_call["arguments"] == {"x": 1}
+
+
+def test_execute_stream_timeout_emits_error_result_for_slow_call() -> None:
+    @tool
+    def quick() -> int:
+        return 1
+
+    @tool
+    def slow() -> int:
+        sleep(0.5)
+        return 2
+
+    registry = ToolRegistry()
+    registry.register(quick)
+    registry.register(slow)
+
+    results = list(
+        registry.execute_stream(
+            [
+                {"id": "q", "name": "quick", "arguments": {}},
+                {"id": "s", "name": "slow", "arguments": {}},
+            ],
+            timeout=0.05,
+        )
+    )
+
+    by_id = {r["tool_call_id"]: r for r in results}
+    assert by_id["q"]["error"] is None
+    assert by_id["q"]["output"] == 1
+    assert by_id["s"]["error"] is not None
+    assert "timeout" in by_id["s"]["error"].lower()
+
+
+def test_execute_parallel_timeout_isolates_slow_call() -> None:
+    @tool
+    def quick(n: int) -> int:
+        return n
+
+    @tool
+    def slow() -> str:
+        sleep(0.5)
+        return "done"
+
+    registry = ToolRegistry()
+    registry.register(quick)
+    registry.register(slow)
+
+    results = registry.execute(
+        [
+            {"id": "q1", "name": "quick", "arguments": {"n": 1}},
+            {"id": "s1", "name": "slow", "arguments": {}},
+            {"id": "q2", "name": "quick", "arguments": {"n": 2}},
+        ],
+        parallel=True,
+        timeout=0.05,
+    )
+
+    by_id = {r["tool_call_id"]: r for r in results}
+    assert by_id["q1"]["output"] == 1
+    assert by_id["q2"]["output"] == 2
+    assert by_id["s1"]["error"] is not None
+    assert "timeout" in by_id["s1"]["error"].lower()
+
+
+def test_execute_async_stream_timeout_emits_error_result_for_slow_call() -> None:
+    @tool
+    async def quick() -> int:
+        return 1
+
+    @tool
+    async def slow() -> int:
+        await asyncio.sleep(0.5)
+        return 2
+
+    registry = ToolRegistry()
+    registry.register(quick)
+    registry.register(slow)
+
+    async def run() -> list:
+        out = []
+        async for item in registry.execute_stream_async(
+            [
+                {"id": "q", "name": "quick", "arguments": {}},
+                {"id": "s", "name": "slow", "arguments": {}},
+            ],
+            timeout=0.05,
+        ):
+            out.append(item)
+        return out
+
+    results = asyncio.run(run())
+    by_id = {r["tool_call_id"]: r for r in results}
+    assert by_id["q"]["error"] is None
+    assert by_id["s"]["error"] is not None
+    assert "timeout" in by_id["s"]["error"].lower()
+
+
+def test_execute_rejects_negative_and_bool_timeouts() -> None:
+    @tool
+    def noop() -> int:
+        return 1
+
+    registry = ToolRegistry()
+    registry.register(noop)
+    call = [{"id": "t1", "name": "noop", "arguments": {}}]
+
+    with pytest.raises(ValueError, match="timeout must be > 0"):
+        registry.execute(call, timeout=-0.5)
+    with pytest.raises(TypeError, match="timeout must be a number"):
+        registry.execute(call, timeout=True)  # type: ignore[arg-type]
+
+
+def test_execute_async_rejects_invalid_timeout() -> None:
+    @tool
+    async def noop() -> int:
+        return 1
+
+    registry = ToolRegistry()
+    registry.register(noop)
+    call = [{"id": "t1", "name": "noop", "arguments": {}}]
+
+    async def run_zero() -> None:
+        await registry.execute_async(call, timeout=0)
+
+    async def run_str() -> None:
+        await registry.execute_async(call, timeout="1")  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="timeout must be > 0"):
+        asyncio.run(run_zero())
+    with pytest.raises(TypeError, match="timeout must be a number"):
+        asyncio.run(run_str())
+
+
+class _FakeOpenAIFunction:
+    def __init__(self, name: str, arguments: str) -> None:
+        self.name = name
+        self.arguments = arguments
+
+
+class _FakeOpenAIToolCall:
+    def __init__(self, call_id: str, name: str, arguments: str) -> None:
+        self.id = call_id
+        self.function = _FakeOpenAIFunction(name, arguments)
+
+
+class _FakeOpenAIMessage:
+    def __init__(self, tool_calls: list[_FakeOpenAIToolCall]) -> None:
+        self.tool_calls = tool_calls
+
+
+def test_parse_tool_calls_strict_raises_for_openai_sdk_object_form() -> None:
+    message = _FakeOpenAIMessage([_FakeOpenAIToolCall("call_1", "do_thing", "{not-json")])
+
+    with pytest.raises(ValueError, match="Malformed JSON arguments"):
+        parse_tool_calls(message, "openai", strict=True)
+
+
+def test_parse_tool_calls_strict_validates_every_openai_call() -> None:
+    message = {
+        "tool_calls": [
+            {"id": "ok", "function": {"name": "a", "arguments": '{"x": 1}'}},
+            {"id": "bad", "function": {"name": "b", "arguments": "{nope"}},
+        ]
+    }
+
+    with pytest.raises(ValueError, match="Malformed JSON arguments for tool 'b'"):
+        parse_tool_calls(message, "openai", strict=True)
+
+
+def test_parse_tool_calls_default_defers_malformed_openai_arguments_to_execute() -> None:
+    message = {
+        "tool_calls": [{"id": "call_1", "function": {"name": "do_thing", "arguments": "{not-json"}}]
+    }
+
+    [call] = parse_tool_calls(message, "openai")
+    assert call["arguments"] == "{not-json"
+
+    @tool
+    def do_thing(x: int) -> int:
+        return x
+
+    registry = ToolRegistry()
+    registry.register(do_thing)
+    [result] = registry.execute([call])
+    assert result["error"] is not None
+    assert "json" in result["error"].lower() or "expecting" in result["error"].lower()
+
+
+def test_parse_tool_calls_strict_accepts_empty_openai_arguments() -> None:
+    message = {"tool_calls": [{"id": "c1", "function": {"name": "noop", "arguments": ""}}]}
+
+    [call] = parse_tool_calls(message, "openai", strict=True)
+    assert call["arguments"] == ""
