@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.4.3 (2026-04-24)
+
+### Bug Fixes
+
+- **readme**: Replace ci+python badges with release pipeline badge
+  ([`b1ca4aa`](https://github.com/ndamulelonemakh/baretools-ai/commit/b1ca4aa7c57e05a84b32f95b49f031cb6daee5f4))
+
+
 ## v0.4.2 (2026-04-24)
 
 ### Bug Fixes
