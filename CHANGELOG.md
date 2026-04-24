@@ -2,6 +2,24 @@
 
 <!-- version list -->
 
+## v0.4.0 (2026-04-24)
+
+### Continuous Integration
+
+- **release**: Allow manual workflow_dispatch
+  ([`85a6ee6`](https://github.com/ndamulelonemakh/baretools-ai/commit/85a6ee6fa3ee17f157a04d3ed5f99613a05de1db))
+
+### Documentation
+
+- **readme**: Clarify contributing guidelines and trim redundant CI note
+  ([`651c78b`](https://github.com/ndamulelonemakh/baretools-ai/commit/651c78bef5215b116e806047003b89713caabae7))
+
+### Features
+
+- **core**: Add per-call timeout and strict OpenAI tool-call parsing
+  ([`4425426`](https://github.com/ndamulelonemakh/baretools-ai/commit/442542616b4c26cc7b2f5dee81bb38f91b5a7e16))
+
+
 ## v0.3.0 (Current branch target)
 
 - Zero runtime dependencies: baretools ships with no third-party packages on
