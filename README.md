@@ -4,7 +4,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/baretools-ai.svg)](https://pypi.org/project/baretools-ai/)
 [![Python versions](https://img.shields.io/pypi/pyversions/baretools-ai.svg)](https://pypi.org/project/baretools-ai/)
-[![CI](https://github.com/ndamulelonemakh/baretools-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/ndamulelonemakh/baretools-ai/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ndamulelonemakh/baretools-ai/ci.yml?branch=main&label=CI)](https://github.com/ndamulelonemakh/baretools-ai/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Status: Alpha.
