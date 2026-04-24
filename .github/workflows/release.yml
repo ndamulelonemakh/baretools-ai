@@ -99,12 +99,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run semantic-release version --no-vcs-release
 
-      - name: Publish to PyPI (Trusted Publisher)
-        if: steps.next.outputs.should_release == 'true' && hashFiles('dist/*') != ''
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          skip-existing: true
-
       - name: Create GitHub Release with AI-enhanced notes
         if: steps.next.outputs.should_release == 'true'
         env:
@@ -114,3 +108,9 @@ jobs:
             --title "v${{ steps.next.outputs.version }}" \
             --notes-file .release/notes.md \
             dist/*
+
+      - name: Publish to PyPI (Trusted Publisher)
+        if: steps.next.outputs.should_release == 'true' && hashFiles('dist/*') != ''
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
