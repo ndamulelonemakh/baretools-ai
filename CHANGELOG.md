@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.4.4 (2026-04-24)
+
+### Bug Fixes
+
+- **readme**: Bypass stale camo cache for pypi+release badges
+  ([`97c45a9`](https://github.com/ndamulelonemakh/baretools-ai/commit/97c45a9084e4edccc918faeec4ee5348ce6ee111))
+
+
 ## v0.4.3 (2026-04-24)
 
 ### Bug Fixes
