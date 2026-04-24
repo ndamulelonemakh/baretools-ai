@@ -2,8 +2,8 @@
 
 **The un-framework for AI `Engineers`** — Build AI Agents, Not Framework Wrappers.
 
-[![PyPI version](https://img.shields.io/pypi/v/baretools-ai.svg)](https://pypi.org/project/baretools-ai/)
-[![Release](https://img.shields.io/github/actions/workflow/status/ndamulelonemakh/baretools-ai/release.yml?branch=main&label=release)](https://github.com/ndamulelonemakh/baretools-ai/actions/workflows/release.yml)
+[![PyPI version](https://img.shields.io/pypi/v/baretools-ai?cacheSeconds=300)](https://pypi.org/project/baretools-ai/)
+[![Release](https://img.shields.io/github/actions/workflow/status/ndamulelonemakh/baretools-ai/release.yml?branch=main&label=release&cacheSeconds=300)](https://github.com/ndamulelonemakh/baretools-ai/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Status: Alpha.
