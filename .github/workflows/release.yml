@@ -41,11 +41,13 @@ jobs:
         id: next
         run: |
           NEXT=$(uv run semantic-release --noop version --print 2>/dev/null | tail -n1)
+          LAST=$(uv run semantic-release --noop version --print-last-released 2>/dev/null | tail -n1)
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
-          if [ -n "$NEXT" ] && [ "$NEXT" != "0.0.0" ]; then
+          if [ -n "$NEXT" ] && [ "$NEXT" != "0.0.0" ] && [ "$NEXT" != "$LAST" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "No version bump required (next=$NEXT, last=$LAST). Skipping release."
           fi
 
       - name: Collect commits since last tag
@@ -103,7 +105,7 @@ jobs:
         run: uv run semantic-release version --no-vcs-release
 
       - name: Create GitHub Release with AI-enhanced notes
-        if: steps.next.outputs.should_release == 'true'
+        if: steps.next.outputs.should_release == 'true' && hashFiles('dist/*') != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
