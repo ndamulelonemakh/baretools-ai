@@ -2,6 +2,22 @@
 
 <!-- version list -->
 
+## v0.4.1 (2026-04-24)
+
+### Bug Fixes
+
+- **release**: Skip when no version bump and guard gh release on dist artifacts
+  ([`7ab08f8`](https://github.com/ndamulelonemakh/baretools-ai/commit/7ab08f80bc89b1f10e7bbee1c2eaad7378dc91c9))
+
+### Continuous Integration
+
+- **release**: Bind release job to pypi environment for trusted publishing
+  ([`e4fc014`](https://github.com/ndamulelonemakh/baretools-ai/commit/e4fc0142f5f94d7bab0bb2d488125319ec13bf4b))
+
+- **release**: Create github release before pypi publish so pypi failures don't skip it
+  ([`f00dff7`](https://github.com/ndamulelonemakh/baretools-ai/commit/f00dff7a6bc11247faa04ed56b958350a4498523))
+
+
 ## v0.4.0 (2026-04-24)
 
 ### Continuous Integration
