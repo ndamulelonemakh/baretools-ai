@@ -1,6 +1,6 @@
 # Baretools AI
 
-**The un-framework for AI Agents** — just the plumbing, no supply-chain baggage.
+**The un-framework for AI `Engineers`** — Build AI Agents, Not Framework Wrappers.
 
 [![PyPI version](https://img.shields.io/pypi/v/baretools-ai.svg)](https://pypi.org/project/baretools-ai/)
 [![Python versions](https://img.shields.io/pypi/pyversions/baretools-ai.svg)](https://pypi.org/project/baretools-ai/)
